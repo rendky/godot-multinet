@@ -1,7 +1,7 @@
 #ifndef MULTINET_NET_INTEREST_H
 #define MULTINET_NET_INTEREST_H
 
-#include "coordinates.h"
+#include "core/coordinates.h"
 
 #include <cmath>
 #include <cstdint>

@@ -1,7 +1,7 @@
 #ifndef MULTINET_NET_LATEJOIN_H
 #define MULTINET_NET_LATEJOIN_H
 
-#include "net_interest.h"
+#include "spatial/net_interest.h"
 
 #include <cstdint>
 #include <unordered_map>

@@ -1,7 +1,7 @@
 #ifndef MULTINET_NET_RECONCILIATION_H
 #define MULTINET_NET_RECONCILIATION_H
 
-#include "coordinates.h"
+#include "core/coordinates.h"
 
 #include <cmath>
 #include <cstdint>

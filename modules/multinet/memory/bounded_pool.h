@@ -1,7 +1,7 @@
 #ifndef MULTINET_BOUNDED_POOL_H
 #define MULTINET_BOUNDED_POOL_H
 
-#include "generation_handle.h"
+#include "memory/generation_handle.h"
 #include <cstddef>
 #include <cstdint>
 #include <vector>

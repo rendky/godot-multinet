@@ -1,7 +1,7 @@
 #ifndef MULTINET_SCHEMA_MIGRATION_H
 #define MULTINET_SCHEMA_MIGRATION_H
 
-#include "binary_schema.h"
+#include "schema/binary_schema.h"
 
 #include <cstddef>
 #include <cstdint>

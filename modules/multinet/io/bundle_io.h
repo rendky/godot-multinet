@@ -1,8 +1,8 @@
 #ifndef MULTINET_BUNDLE_IO_H
 #define MULTINET_BUNDLE_IO_H
 
-#include "arena_allocator.h"
-#include "binary_schema.h"
+#include "memory/arena_allocator.h"
+#include "schema/binary_schema.h"
 
 #include <cstddef>
 #include <cstdint>

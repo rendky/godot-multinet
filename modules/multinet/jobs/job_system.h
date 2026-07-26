@@ -1,7 +1,7 @@
 #ifndef MULTINET_JOB_SYSTEM_H
 #define MULTINET_JOB_SYSTEM_H
 
-#include "generation_handle.h"
+#include "memory/generation_handle.h"
 
 #include <atomic>
 #include <cstddef>
