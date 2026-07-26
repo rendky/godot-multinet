@@ -38,6 +38,12 @@ void MultinetTerrainChunk3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "max_elevation_m"), "set_max_elevation_m", "get_max_elevation_m");
 }
 
+void MultinetTerrainChunk3D::_notification(int p_what) {
+	if (p_what == NOTIFICATION_READY) {
+		generate_chunk();
+	}
+}
+
 void MultinetTerrainChunk3D::set_cell_x(int64_t p_val) {
 	cell_x = p_val;
 }
