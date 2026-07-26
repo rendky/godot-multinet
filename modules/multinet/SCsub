@@ -1,0 +1,9 @@
+Import('env')
+
+env_multinet = env.Clone()
+
+sources = [
+    "register_types.cpp",
+]
+
+env_multinet.add_source_files(env.modules_sources, sources)
