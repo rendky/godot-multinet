@@ -430,26 +430,60 @@ static bool run_net_tier_01_verification() {
 }
 
 static bool run_net_late_01_verification() {
-	CanonRecoveryManager canon_mgr;
+	LocalCanonMock canon;
+
+	// Submit durable proposal 1
+	CanonCommitRequest req1{};
+	req1.proposal.proposal_id = 1001;
+	req1.proposal.scope_id = 50;
+	req1.proposal.event_type = 1;
+	req1.proposal.actor = 202;
+	req1.proposal.idempotency_key = 0x11223344;
+	req1.domain_result.accepted = true;
+
+	CanonCommitResult res1 = canon.process_commit_request(req1);
+	if (!res1.committed || res1.canonical_sequence != 1 || res1.accepted_scope_version != 1) {
+		return false;
+	}
+
+	// Submit identical proposal (Rule 12.4: Idempotency test)
+	CanonCommitResult res1_dup = canon.process_commit_request(req1);
+	if (!res1_dup.committed || res1_dup.canonical_sequence != 1 || res1_dup.authentication != res1.authentication) {
+		return false;
+	}
+
+	// Submit durable proposal 2
+	CanonCommitRequest req2{};
+	req2.proposal.proposal_id = 1002;
+	req2.proposal.scope_id = 50;
+	req2.proposal.event_type = 2;
+	req2.proposal.actor = 202;
+	req2.proposal.idempotency_key = 0x55667788;
+	req2.proposal.base_version = 1;
+	req2.domain_result.accepted = true;
+
+	CanonCommitResult res2 = canon.process_commit_request(req2);
+	if (!res2.committed || res2.canonical_sequence != 2 || res2.accepted_scope_version != 2) {
+		return false;
+	}
+
+	// Verify LateJoinManager integration with LocalCanonMock
+	LateJoinManager late_join(&canon);
 	PlayerID player1 = 202;
 	SessionID session1 = 8001;
 	SessionToken token1 = 0xABCD1234;
 
-	if (!canon_mgr.register_new_session(player1, session1, token1)) return false;
-	canon_mgr.record_canonical_event(501);
-	canon_mgr.record_canonical_event(502);
-
-	if (!canon_mgr.handle_disconnect(player1)) return false;
+	if (!late_join.register_new_session(player1, session1, token1)) return false;
+	if (!late_join.handle_disconnect(player1)) return false;
 
 	uint64_t recovered_seq = 0;
-	if (canon_mgr.attempt_reconnect(player1, 0xBAD10000, recovered_seq)) return false;
+	if (late_join.attempt_reconnect(player1, 0xBAD10000, recovered_seq)) return false;
+	if (!late_join.attempt_reconnect(player1, token1, recovered_seq)) return false;
 
-	if (!canon_mgr.attempt_reconnect(player1, token1, recovered_seq)) return false;
-
-	std::vector<uint64_t> missed_events;
-	size_t count = canon_mgr.get_missed_events_for_reconnect(0, missed_events);
+	std::vector<CanonicalEvent> missed_events;
+	size_t count = late_join.get_missed_events_for_reconnect(0, missed_events);
 	if (count != 2 || missed_events.size() != 2) return false;
-	if (missed_events[0] != 501 || missed_events[1] != 502) return false;
+	if (missed_events[0].event_id != 1001 || missed_events[1].event_id != 1002) return false;
 
 	return true;
 }
@@ -477,7 +511,7 @@ void initialize_multinet_module(ModuleInitializationLevel p_level) {
 	bool late_pass = Multinet::run_net_late_01_verification();
 
 	if (mem_pass && job_pass && thread_pass && schema_pass && fuzz_pass && debug_pass && coord_pass && event_pass && quality_pass && migrate_pass && bundle_pass && recon_pass && tier_pass && late_pass) {
-		print_line("[multinet] Subsystem Subdirectory Architecture Reorganization Verified OK.");
+		print_line("[multinet] Local Canon Mock & Reconnect Recovery Verified OK.");
 	} else {
 		print_error("[multinet] Verification FAILED!");
 	}
