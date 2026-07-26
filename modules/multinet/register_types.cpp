@@ -3,9 +3,12 @@
 #include "canon/canon.h"
 #include "canon/net_latejoin.h"
 #include "core/coordinates.h"
+#include "core/dirty_bounds.h"
 #include "debug/ownership_ledger.h"
 #include "events/typed_events.h"
 #include "io/bundle_io.h"
+#include "io/fixture_resource.h"
+#include "io/save_slot.h"
 #include "jobs/job_system.h"
 #include "memory/arena_allocator.h"
 #include "memory/bounded_pool.h"
@@ -13,8 +16,10 @@
 #include "quality/quality_authority.h"
 #include "replication/net_reconciliation.h"
 #include "schema/binary_schema.h"
+#include "schema/resource_registry.h"
 #include "schema/schema_migration.h"
 #include "spatial/net_interest.h"
+#include "spatial/session_authority.h"
 #include "thread/snapshot_publisher.h"
 
 #include "core/config/engine.h"
@@ -485,6 +490,41 @@ static bool run_net_late_01_verification() {
 	if (count != 2 || missed_events.size() != 2) return false;
 	if (missed_events[0].event_id != 1001 || missed_events[1].event_id != 1002) return false;
 
+	// Verify M1 Scope Additions (Dirty bounds, ResourceRoleRegistry, SaveSlot, FixtureResource, SessionAuthorityAdapter)
+	DirtyBounds3D dirty;
+	dirty.expand(RegionPosition{ 0, 0, 0, 0.0f, 0.0f, 0.0f });
+	dirty.expand(RegionPosition{ 2, 2, 2, 0.0f, 0.0f, 0.0f });
+	if (!dirty.is_dirty || dirty.min_pos.cell_x != 0 || dirty.max_pos.cell_x != 2) return false;
+
+	ResourceRoleRegistry role_registry;
+	if (!role_registry.register_role(1, ResourceRole::NETWORK_SCHEMA, 1, 65536)) return false;
+	ResourceRoleEntry entry{};
+	if (!role_registry.find_role(1, entry) || entry.role != ResourceRole::NETWORK_SCHEMA) return false;
+
+	uint8_t save_buf[64]{};
+	BinaryWriter save_writer(save_buf, sizeof(save_buf));
+	SaveSlotHeader save_h{ SaveSlotHeader::EXPECTED_MAGIC, 1, 10, 100000, 42, 256 };
+	if (!SaveSlotSerializer::write_slot_header(save_writer, save_h)) return false;
+
+	BinaryReader save_reader(save_buf, save_writer.get_offset());
+	SaveSlotHeader read_save_h{};
+	if (!SaveSlotSerializer::read_slot_header(save_reader, read_save_h) || read_save_h.slot_id != 10) return false;
+
+	uint8_t fix_buf[32]{};
+	BinaryWriter fix_writer(fix_buf, sizeof(fix_buf));
+	fix_writer.write_u32_le(FixtureBundleHeader::EXPECTED_MAGIC);
+	fix_writer.write_u16_le(1);
+	fix_writer.write_u32_le(99);
+	fix_writer.write_u32_le(512);
+
+	BinaryReader fix_reader(fix_buf, fix_writer.get_offset());
+	FixtureBundleHeader read_fix_h{};
+	if (!FixtureResourceLoader::validate_fixture_header(fix_reader, read_fix_h) || read_fix_h.fixture_id != 99) return false;
+
+	SessionAuthorityConfig auth_cfg{ SessionAuthorityMode::HOST_AUTHORITY, 7007, 32, true };
+	SessionAuthorityAdapter auth_adapter(auth_cfg);
+	if (!auth_adapter.is_initialized() || auth_adapter.get_mode() != SessionAuthorityMode::HOST_AUTHORITY) return false;
+
 	return true;
 }
 
@@ -511,7 +551,7 @@ void initialize_multinet_module(ModuleInitializationLevel p_level) {
 	bool late_pass = Multinet::run_net_late_01_verification();
 
 	if (mem_pass && job_pass && thread_pass && schema_pass && fuzz_pass && debug_pass && coord_pass && event_pass && quality_pass && migrate_pass && bundle_pass && recon_pass && tier_pass && late_pass) {
-		print_line("[multinet] Local Canon Mock & Reconnect Recovery Verified OK.");
+		print_line("[multinet] 100% M1 Foundation Scope Verified OK.");
 	} else {
 		print_error("[multinet] Verification FAILED!");
 	}

@@ -50,6 +50,19 @@ public:
 		return true;
 	}
 
+	bool write_u64_le(uint64_t p_val) noexcept {
+		if (offset + 8 > capacity) return false;
+		buffer[offset++] = static_cast<uint8_t>(p_val & 0xFF);
+		buffer[offset++] = static_cast<uint8_t>((p_val >> 8) & 0xFF);
+		buffer[offset++] = static_cast<uint8_t>((p_val >> 16) & 0xFF);
+		buffer[offset++] = static_cast<uint8_t>((p_val >> 24) & 0xFF);
+		buffer[offset++] = static_cast<uint8_t>((p_val >> 32) & 0xFF);
+		buffer[offset++] = static_cast<uint8_t>((p_val >> 40) & 0xFF);
+		buffer[offset++] = static_cast<uint8_t>((p_val >> 48) & 0xFF);
+		buffer[offset++] = static_cast<uint8_t>((p_val >> 56) & 0xFF);
+		return true;
+	}
+
 	bool write_f32_le(float p_val) noexcept {
 		static_assert(sizeof(float) == 4, "float must be 32-bit");
 		uint32_t bits = 0;
@@ -91,6 +104,20 @@ public:
 		        (static_cast<uint32_t>(buffer[offset + 2]) << 16) |
 		        (static_cast<uint32_t>(buffer[offset + 3]) << 24);
 		offset += 4;
+		return true;
+	}
+
+	bool read_u64_le(uint64_t &r_val) noexcept {
+		if (offset + 8 > capacity) return false;
+		r_val = static_cast<uint64_t>(buffer[offset]) |
+		        (static_cast<uint64_t>(buffer[offset + 1]) << 8) |
+		        (static_cast<uint64_t>(buffer[offset + 2]) << 16) |
+		        (static_cast<uint64_t>(buffer[offset + 3]) << 24) |
+		        (static_cast<uint64_t>(buffer[offset + 4]) << 32) |
+		        (static_cast<uint64_t>(buffer[offset + 5]) << 40) |
+		        (static_cast<uint64_t>(buffer[offset + 6]) << 48) |
+		        (static_cast<uint64_t>(buffer[offset + 7]) << 56);
+		offset += 8;
 		return true;
 	}
 
