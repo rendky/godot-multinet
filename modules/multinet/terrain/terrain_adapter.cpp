@@ -45,7 +45,9 @@ void MultinetTerrainChunk3D::_notification(int p_what) {
 }
 
 void MultinetTerrainChunk3D::set_cell_x(int64_t p_val) {
+	if (cell_x == p_val) return;
 	cell_x = p_val;
+	generate_chunk();
 }
 
 int64_t MultinetTerrainChunk3D::get_cell_x() const {
@@ -53,7 +55,9 @@ int64_t MultinetTerrainChunk3D::get_cell_x() const {
 }
 
 void MultinetTerrainChunk3D::set_cell_z(int64_t p_val) {
+	if (cell_z == p_val) return;
 	cell_z = p_val;
+	generate_chunk();
 }
 
 int64_t MultinetTerrainChunk3D::get_cell_z() const {
@@ -61,7 +65,9 @@ int64_t MultinetTerrainChunk3D::get_cell_z() const {
 }
 
 void MultinetTerrainChunk3D::set_seed(uint32_t p_seed) {
+	if (seed == p_seed) return;
 	seed = p_seed;
+	generate_chunk();
 }
 
 uint32_t MultinetTerrainChunk3D::get_seed() const {
@@ -69,7 +75,9 @@ uint32_t MultinetTerrainChunk3D::get_seed() const {
 }
 
 void MultinetTerrainChunk3D::set_max_elevation_m(float p_elev) {
+	if (max_elevation_m == p_elev) return;
 	max_elevation_m = p_elev;
+	generate_chunk();
 }
 
 float MultinetTerrainChunk3D::get_max_elevation_m() const {
@@ -106,7 +114,8 @@ void MultinetTerrainChunk3D::generate_chunk() {
 
 	for (size_t i = 0; i < vert_span.size(); ++i) {
 		const auto &v = vert_span[i];
-		godot_vertices.set(i, Vector3(v.x, v.y, v.z));
+		// Center vertex grid around node origin (-512m to +512m)
+		godot_vertices.set(i, Vector3(v.x - 512.0f, v.y, v.z - 512.0f));
 
 		// Evaluate smooth analytical normal using HeightfieldGenerator
 		double world_x = (static_cast<double>(cell_x) * 1024.0) + static_cast<double>(v.x);
@@ -162,13 +171,12 @@ void MultinetTerrainChunk3D::generate_chunk() {
 
 		collision_shape->set_shape(height_shape);
 
-		// Center the collision shape to align with mesh origin (0..1024 offset)
+		// Align collision shape centered at node origin (0,0,0) matching mesh (-512..+512)
 		Transform3D shape_transform;
-		shape_transform.origin = Vector3(512.0f, 0.0f, 512.0f);
 		collision_shape->set_transform(shape_transform);
 	}
 
-	set_position(Vector3(static_cast<float>(cell_x * 1024), 0.0f, static_cast<float>(cell_z * 1024)));
+	set_position(Vector3(static_cast<float>(cell_x * 1024 + 512), 0.0f, static_cast<float>(cell_z * 1024 + 512)));
 }
 
 } // namespace Multinet

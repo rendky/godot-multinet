@@ -75,7 +75,7 @@ public:
 			frequency *= static_cast<double>(recipe.lacunarity);
 		}
 
-		double normalized = total_elevation / max_possible;
+		double normalized = (total_elevation / max_possible) - 0.5;
 		return normalized * static_cast<double>(recipe.max_elevation_m);
 	}
 
