@@ -1,76 +1,66 @@
-# Godot Engine
+# godot-multinet
 
-<p align="center">
-  <a href="https://godotengine.org">
-    <img src="misc/logo/logo_outlined.svg" width="400" alt="Godot Engine logo">
-  </a>
-</p>
+`godot-multinet` is a C++23 engine fork built on Godot 4. It exists specifically to power **Infront**, a game that needs a world that behaves honestly. Stock Godot is a remarkable foundation. We love it, we respect it, hence why we chose it. Could have started from scratch but that would have cost us a lot of time... thing is, it just doesn't ship with systemic terrain systems, a deterministic network recovery setup , or zero-allocation runtime laws out of the box!
 
-## 2D and 3D cross-platform game engine
+The doctrine simple and straightforward. one procedural truth, multiple bounded representations. We do many cool things with this simple rule.
 
-**[Godot Engine](https://godotengine.org) is a feature-packed, cross-platform
-game engine to create 2D and 3D games from a unified interface.** It provides a
-comprehensive set of [common tools](https://godotengine.org/features), so that
-users can focus on making games without having to reinvent the wheel. Games can
-be exported with one click to a number of platforms, including the major desktop
-platforms (Linux, macOS, Windows), mobile platforms (Android, iOS), as well as
-Web-based platforms and [consoles](https://godotengine.org/consoles).
+---
 
-## Free, open source and community-driven
+## Why Multinet Exists
 
-Godot is completely free and open source under the very permissive [MIT license](https://godotengine.org/license).
-No strings attached, no royalties, nothing. The users' games are theirs, down
-to the last line of engine code. Godot's development is fully independent and
-community-driven, empowering users to help shape their engine to match their
-expectations. It is supported by the [Godot Foundation](https://godot.foundation/)
-not-for-profit.
+Infront (a game you should be looking forward to) features dynamic water, structural destruction, deep nation simulation, and thousands of persistent entities. The accepted event order doesn't need to exist twice. Stock engine nodes are helpers.
 
-Before being open sourced in [February 2014](https://github.com/godotengine/godot/commit/0b806ee0fc9097fa7bda7ac0109191c9c5e0a1ac),
-Godot had been developed by [Juan Linietsky](https://github.com/reduz) and
-[Ariel Manzur](https://github.com/punto-) for several years as an in-house
-engine, used to publish several work-for-hire titles.
+What broke the default approach? Well, scene trees and raw node hierarchies get heavy real fast when thousands of entities need physics, navigation, and weather forcing at the same time. Multinet moves semantic state into data-oriented domain systems while keeping Godot rendering pixels and managing window lifecycles.
 
-![Screenshot of a 3D scene in the Godot Engine editor](https://raw.githubusercontent.com/godotengine/godot-design/master/screenshots/editor_tps_demo_1920x1080.jpg)
+---
 
-## Getting the engine
+## Core Doctrine & Architecture
 
-### Binary downloads
+Every system owns its state! they publish immutable snapshots, and fail elegantly when hardware can't keep up.
 
-Official binaries for the Godot editor and the export templates can be found
-[on the Godot website](https://godotengine.org/download).
+- **Canon Layer:** Owns accepted durable event ordering, idempotency, and recovery metadata. If canon is confused, the world confused. So no, canon is never confused!
+- **Multinetwork (multinet origin):** Does transport, interest management, and spatial correction delivery. Transport is not ownership!
+- **Jolt Physics:** Collision truth and physical queries.
+- **CADENCE (proprietary motion system thinned out for public use):** Does locomotion, gait, pose, and contact expectation.
+- **Weather & BoltzField:** Does atmospheric forcing and coarse optical transport.
+- **LivingWorldRendering (LWR):** Handles representation, direct lighting, and final pixels.
 
-### Compiling from source
 
-[See the official docs](https://docs.godotengine.org/en/latest/engine_details/development/compiling)
-for compilation instructions for every supported platform.
+---
 
-## Community and contributing
+## Platform Floors & Runtime Law
 
-Godot is not only an engine but an ever-growing community of users and engine
-developers. The main community channels are listed [on the homepage](https://godotengine.org/community).
+Multinet is being designed to run on humble hardware without stuttering. THE GOAL is...
 
-The best way to get in touch with the core engine developers is to join the
-[Godot Contributors Chat](https://chat.godotengine.org).
+- **Portable Floor:** Samsung A21s, iPhone 7 Plus.
+- **Desktop Floor:** GTX 860M 2GB, i7-4710HQ, 16GB DDR3 RAM, 5400 RPM HDD.
 
-To get started contributing to the project, see the [contributing guide](CONTRIBUTING.md).
-This document also includes guidelines for reporting bugs.
+### Hard Runtime Limits
+1. **Zero hot-path heap allocations.** Arenas handle transient data. Bounded pools handle persistent entities.
+2. **Zero synchronous gameplay readbacks.** No waiting on GPU, disk, or network in frame loops.
+3. **FP64 World Coordinates.** FP64 handles global persistence. FP32 or integer region-local coords handle rendering and Jolt.
 
-## Documentation and demos
+If a feature causes frame stalls on the portable floor, that feature has a design question to answer. Such is life.
 
-The official documentation is hosted on [Read the Docs](https://docs.godotengine.org).
-It is maintained by the Godot community in its own [GitHub repository](https://github.com/godotengine/godot-docs).
+---
 
-The [class reference](https://docs.godotengine.org/en/latest/classes/)
-is also accessible from the Godot editor.
+## Determinism
 
-We also maintain official demos in their own [GitHub repository](https://github.com/godotengine/godot-demo-projects)
-as well as a list of [awesome Godot community resources](https://github.com/godotengine/awesome-godot).
+Procedural generation and network validation rely on `SquirrelNoise5 v1` as the canonical integer hash. Identical coordinate bits, seed, and algorithm version return the exact same `uint32_t` across scalar C++, SIMD C++, Godot shaders, and mobile shaders.
 
-There are also a number of other
-[learning resources](https://docs.godotengine.org/en/latest/community/tutorials.html)
-provided by the community, such as text and video tutorials, demos, etc.
-Consult the [community channels](https://godotengine.org/community)
-for more information.
+- **Exact Parity:** Hashes, seeds, IDs, integer masks, material classes, topology flags.
+- **Tolerance-Gated stuff:** Heights, gradients, normals.
+- **Cosmetic:** Microdetail, particles.
 
-[![Code Triagers Badge](https://www.codetriage.com/godotengine/godot/badges/users.svg)](https://www.codetriage.com/godotengine/godot)
-[![Translate on Weblate](https://hosted.weblate.org/widgets/godot-engine/-/godot/svg-badge.svg)](https://hosted.weblate.org/engage/godot-engine/?utm_source=widget)
+---
+
+## Code Boundaries & Building
+
+New engine modules live under `modules/`. Internal kernels use C++23 PODs, `std::span`, arenas, and data-oriented containers.
+
+```bash
+# Build editor binary (SCons)
+scons platform=windows target=editor dev_build=yes
+```
+
+This readme will expand over time as we build. This is just the beginning.
