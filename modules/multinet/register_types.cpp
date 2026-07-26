@@ -1,5 +1,7 @@
 #include "register_types.h"
 
+#include "canon/canon.h"
+#include "canon/net_latejoin.h"
 #include "core/coordinates.h"
 #include "debug/ownership_ledger.h"
 #include "events/typed_events.h"
@@ -9,7 +11,6 @@
 #include "memory/bounded_pool.h"
 #include "memory/generation_handle.h"
 #include "quality/quality_authority.h"
-#include "replication/net_latejoin.h"
 #include "replication/net_reconciliation.h"
 #include "schema/binary_schema.h"
 #include "schema/schema_migration.h"
@@ -429,24 +430,24 @@ static bool run_net_tier_01_verification() {
 }
 
 static bool run_net_late_01_verification() {
-	LateJoinManager late_join;
+	CanonRecoveryManager canon_mgr;
 	PlayerID player1 = 202;
 	SessionID session1 = 8001;
 	SessionToken token1 = 0xABCD1234;
 
-	if (!late_join.register_new_session(player1, session1, token1)) return false;
-	late_join.record_canonical_event(501);
-	late_join.record_canonical_event(502);
+	if (!canon_mgr.register_new_session(player1, session1, token1)) return false;
+	canon_mgr.record_canonical_event(501);
+	canon_mgr.record_canonical_event(502);
 
-	if (!late_join.handle_disconnect(player1)) return false;
+	if (!canon_mgr.handle_disconnect(player1)) return false;
 
 	uint64_t recovered_seq = 0;
-	if (late_join.attempt_reconnect(player1, 0xBAD10000, recovered_seq)) return false;
+	if (canon_mgr.attempt_reconnect(player1, 0xBAD10000, recovered_seq)) return false;
 
-	if (!late_join.attempt_reconnect(player1, token1, recovered_seq)) return false;
+	if (!canon_mgr.attempt_reconnect(player1, token1, recovered_seq)) return false;
 
 	std::vector<uint64_t> missed_events;
-	size_t count = late_join.get_missed_events_for_reconnect(0, missed_events);
+	size_t count = canon_mgr.get_missed_events_for_reconnect(0, missed_events);
 	if (count != 2 || missed_events.size() != 2) return false;
 	if (missed_events[0] != 501 || missed_events[1] != 502) return false;
 
@@ -476,7 +477,7 @@ void initialize_multinet_module(ModuleInitializationLevel p_level) {
 	bool late_pass = Multinet::run_net_late_01_verification();
 
 	if (mem_pass && job_pass && thread_pass && schema_pass && fuzz_pass && debug_pass && coord_pass && event_pass && quality_pass && migrate_pass && bundle_pass && recon_pass && tier_pass && late_pass) {
-		print_line("[multinet] NET-LATE-01 Verified OK (Late-Join Handshake & Disconnect Reconnect Recovery).");
+		print_line("[multinet] Subsystem Subdirectory Architecture Reorganization Verified OK.");
 	} else {
 		print_error("[multinet] Verification FAILED!");
 	}

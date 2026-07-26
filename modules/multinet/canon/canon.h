@@ -1,5 +1,5 @@
-#ifndef MULTINET_NET_LATEJOIN_H
-#define MULTINET_NET_LATEJOIN_H
+#ifndef MULTINET_CANON_H
+#define MULTINET_CANON_H
 
 #include "spatial/net_interest.h"
 
@@ -8,6 +8,8 @@
 #include <vector>
 
 namespace Multinet {
+
+// Canon Subsystem: Durable Event Ordering, Accepted State Recovery & Replay
 
 using SessionToken = uint64_t;
 
@@ -24,14 +26,14 @@ struct CanonicalEventRecord {
 	uint64_t sequence_num{ 0 };
 };
 
-class LateJoinManager {
+class CanonRecoveryManager {
 private:
 	std::unordered_map<PlayerID, ReconnectSessionRecord> sessions;
 	std::vector<CanonicalEventRecord> event_log;
 	uint64_t current_server_sequence{ 0 };
 
 public:
-	LateJoinManager() = default;
+	CanonRecoveryManager() = default;
 
 	bool register_new_session(PlayerID p_player_id, SessionID p_session_id, SessionToken p_token) noexcept {
 		if (p_player_id == 0 || p_session_id == 0 || p_token == 0) return false;
@@ -61,19 +63,18 @@ public:
 
 		ReconnectSessionRecord &rec = it->second;
 		if (rec.session_token != p_token) {
-			return false; // Token mismatch rejection!
+			return false;
 		}
 
 		rec.is_connected = true;
 		r_last_seq = rec.last_ack_sequence;
-		return true; // Session successfully recovered
+		return true;
 	}
 
 	void record_canonical_event(uint64_t p_event_id) noexcept {
 		current_server_sequence++;
 		event_log.push_back(CanonicalEventRecord{ p_event_id, current_server_sequence });
 
-		// Cap event log to last 256 events
 		if (event_log.size() > 256) {
 			event_log.erase(event_log.begin());
 		}
@@ -94,4 +95,4 @@ public:
 
 } // namespace Multinet
 
-#endif // MULTINET_NET_LATEJOIN_H
+#endif // MULTINET_CANON_H
