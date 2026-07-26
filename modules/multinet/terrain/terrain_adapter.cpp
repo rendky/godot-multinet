@@ -32,10 +32,14 @@ void MultinetTerrainChunk3D::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("generate_chunk"), &MultinetTerrainChunk3D::generate_chunk);
 
+	ClassDB::bind_method(D_METHOD("set_frequency", "frequency"), &MultinetTerrainChunk3D::set_frequency);
+	ClassDB::bind_method(D_METHOD("get_frequency"), &MultinetTerrainChunk3D::get_frequency);
+
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "cell_x"), "set_cell_x", "get_cell_x");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "cell_z"), "set_cell_z", "get_cell_z");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "seed"), "set_seed", "get_seed");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "max_elevation_m"), "set_max_elevation_m", "get_max_elevation_m");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "frequency"), "set_frequency", "get_frequency");
 }
 
 void MultinetTerrainChunk3D::_notification(int p_what) {
@@ -82,6 +86,16 @@ void MultinetTerrainChunk3D::set_max_elevation_m(float p_elev) {
 
 float MultinetTerrainChunk3D::get_max_elevation_m() const {
 	return max_elevation_m;
+}
+
+void MultinetTerrainChunk3D::set_frequency(float p_freq) {
+	if (continental_frequency == p_freq) return;
+	continental_frequency = p_freq;
+	generate_chunk();
+}
+
+float MultinetTerrainChunk3D::get_frequency() const {
+	return continental_frequency;
 }
 
 void MultinetTerrainChunk3D::generate_chunk() {
@@ -176,7 +190,7 @@ void MultinetTerrainChunk3D::generate_chunk() {
 		collision_shape->set_transform(shape_transform);
 	}
 
-	set_position(Vector3(static_cast<float>(cell_x * 1024 + 512), 0.0f, static_cast<float>(cell_z * 1024 + 512)));
+	set_position(Vector3(static_cast<float>(cell_x * 1024), 0.0f, static_cast<float>(cell_z * 1024)));
 }
 
 } // namespace Multinet

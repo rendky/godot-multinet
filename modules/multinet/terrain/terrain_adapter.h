@@ -23,7 +23,7 @@ private:
 
 	uint32_t seed{ 0xDEADBEEF };
 	float max_elevation_m{ 500.0f };
-	float continental_frequency{ 0.0001f };
+	float continental_frequency{ 0.003f };
 
 	MeshInstance3D *mesh_instance{ nullptr };
 	StaticBody3D *static_body{ nullptr };
@@ -48,6 +48,9 @@ public:
 
 	void set_max_elevation_m(float p_elev);
 	float get_max_elevation_m() const;
+
+	void set_frequency(float p_freq);
+	float get_frequency() const;
 
 	void generate_chunk();
 };
