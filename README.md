@@ -2,7 +2,7 @@
 
 `godot-multinet` is a C++23 engine fork built on Godot 4. It exists specifically to power **Infront**, a game that needs a world that behaves honestly. Stock Godot is a remarkable foundation. We love it, we respect it, hence why we chose it. Could have started from scratch but that would have cost us a lot of time... thing is, it just doesn't ship with systemic terrain systems, a deterministic network recovery setup , or zero-allocation runtime laws out of the box!
 
-The doctrine simple and straightforward. one procedural truth, multiple bounded representations. We do many cool things with this simple rule.
+The doctrine simple and straightforward. one procedural truth birthing multiple bounded representations. We do many cool things with this simple rule.
 
 ---
 
