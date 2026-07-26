@@ -1,9 +1,9 @@
 #ifndef MULTINET_HEIGHTFIELD_GENERATOR_H
 #define MULTINET_HEIGHTFIELD_GENERATOR_H
 
-#include "core/coordinates.h"
-#include "core/squirrel_noise5.h"
-#include "terrain/terrain_recipe.h"
+#include "modules/multinet/core/coordinates.h"
+#include "modules/multinet/core/squirrel_noise5.h"
+#include "modules/multinet/terrain/terrain_recipe.h"
 
 #include <cmath>
 #include <cstdint>

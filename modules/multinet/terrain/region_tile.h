@@ -1,12 +1,12 @@
 #ifndef MULTINET_REGION_TILE_H
 #define MULTINET_REGION_TILE_H
 
-#include "core/coordinates.h"
-#include "core/dirty_bounds.h"
-#include "core/span.h"
-#include "io/bundle_io.h"
-#include "memory/arena_allocator.h"
-#include "terrain/heightfield_generator.h"
+#include "modules/multinet/core/coordinates.h"
+#include "modules/multinet/core/dirty_bounds.h"
+#include "modules/multinet/core/span.h"
+#include "modules/multinet/io/bundle_io.h"
+#include "modules/multinet/memory/arena_allocator.h"
+#include "modules/multinet/terrain/heightfield_generator.h"
 
 #include <cstdint>
 #include <cstring>

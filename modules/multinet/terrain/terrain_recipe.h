@@ -1,7 +1,7 @@
 #ifndef MULTINET_TERRAIN_RECIPE_H
 #define MULTINET_TERRAIN_RECIPE_H
 
-#include "schema/binary_schema.h"
+#include "modules/multinet/schema/binary_schema.h"
 
 #include <cstdint>
 

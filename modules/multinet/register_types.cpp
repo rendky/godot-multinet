@@ -24,11 +24,13 @@
 #include "spatial/session_authority.h"
 #include "terrain/heightfield_generator.h"
 #include "terrain/region_tile.h"
+#include "terrain/terrain_adapter.h"
 #include "terrain/terrain_queries.h"
 #include "terrain/terrain_recipe.h"
 #include "thread/snapshot_publisher.h"
 
 #include "core/config/engine.h"
+#include "core/object/class_db.h"
 #include "core/os/os.h"
 
 namespace Multinet {
@@ -605,6 +607,10 @@ static bool run_m2_terrain_verification() {
 } // namespace Multinet
 
 void initialize_multinet_module(ModuleInitializationLevel p_level) {
+	if (p_level == MODULE_INITIALIZATION_LEVEL_SCENE) {
+		GDREGISTER_CLASS(Multinet::MultinetTerrainChunk3D);
+	}
+
 	if (p_level != MODULE_INITIALIZATION_LEVEL_SERVERS) {
 		return;
 	}
@@ -626,7 +632,7 @@ void initialize_multinet_module(ModuleInitializationLevel p_level) {
 	bool m2_terrain_pass = Multinet::run_m2_terrain_verification();
 
 	if (mem_pass && job_pass && thread_pass && schema_pass && fuzz_pass && debug_pass && coord_pass && event_pass && quality_pass && migrate_pass && bundle_pass && recon_pass && tier_pass && late_pass && m2_terrain_pass) {
-		print_line("[multinet] TERRAIN-860M-01 Verified OK (Milestone M2 Networked Terrain Explorer).");
+		print_line("[multinet] TERRAIN-860M-01 Verified OK (Milestone M2 Networked Terrain Explorer + Adapter).");
 	} else {
 		print_error("[multinet] Verification FAILED!");
 	}
