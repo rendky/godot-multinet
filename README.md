@@ -45,7 +45,7 @@ If a feature causes frame stalls on the portable floor, that feature has a desig
 
 ## Regarding DETERMINISM which we consider very important.
 
-Procedural generation and network validation rely on SquirrelNoise5 as our primary integer hash because we love it and its fast. 
+Procedural generation and network validation rely on SquirrelNoise5 as our primary integer hash because we love it and it's fast. 
 It means identical coordinate bits, seed, and algorithm version return the exact same `uint32_t` across scalar C++, SIMD C++, Godot shaders, and mobile shaders.
 
 - **Exact Parity:** Hashes, seeds, IDs, integer masks, material classes, topology flags.
