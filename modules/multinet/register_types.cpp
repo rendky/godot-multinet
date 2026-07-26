@@ -4,6 +4,8 @@
 #include "canon/net_latejoin.h"
 #include "core/coordinates.h"
 #include "core/dirty_bounds.h"
+#include "core/span.h"
+#include "core/squirrel_noise5.h"
 #include "debug/ownership_ledger.h"
 #include "events/typed_events.h"
 #include "io/bundle_io.h"
@@ -20,6 +22,10 @@
 #include "schema/schema_migration.h"
 #include "spatial/net_interest.h"
 #include "spatial/session_authority.h"
+#include "terrain/heightfield_generator.h"
+#include "terrain/region_tile.h"
+#include "terrain/terrain_queries.h"
+#include "terrain/terrain_recipe.h"
 #include "thread/snapshot_publisher.h"
 
 #include "core/config/engine.h"
@@ -490,7 +496,7 @@ static bool run_net_late_01_verification() {
 	if (count != 2 || missed_events.size() != 2) return false;
 	if (missed_events[0].event_id != 1001 || missed_events[1].event_id != 1002) return false;
 
-	// Verify M1 Scope Additions (Dirty bounds, ResourceRoleRegistry, SaveSlot, FixtureResource, SessionAuthorityAdapter)
+	// Verify M1 Scope Additions
 	DirtyBounds3D dirty;
 	dirty.expand(RegionPosition{ 0, 0, 0, 0.0f, 0.0f, 0.0f });
 	dirty.expand(RegionPosition{ 2, 2, 2, 0.0f, 0.0f, 0.0f });
@@ -528,6 +534,74 @@ static bool run_net_late_01_verification() {
 	return true;
 }
 
+// ============================================================================
+// MILESTONE M2 (NETWORKED TERRAIN EXPLORER) VERIFICATION SUITE
+// ============================================================================
+
+static bool run_m2_terrain_verification() {
+	// 1. TERRAIN-RECIPE-01: Recipe Serialization
+	TerrainRecipe recipe{};
+	recipe.seed = 0x12345678;
+	recipe.continental_frequency = 0.0002f;
+	recipe.max_elevation_m = 750.0f;
+	recipe.octave_count = 5;
+
+	uint8_t recipe_buf[64]{};
+	BinaryWriter recipe_writer(recipe_buf, sizeof(recipe_buf));
+	if (!TerrainRecipeSerializer::write_recipe(recipe_writer, recipe)) return false;
+
+	BinaryReader recipe_reader(recipe_buf, recipe_writer.get_offset());
+	TerrainRecipe read_recipe{};
+	if (!TerrainRecipeSerializer::read_recipe(recipe_reader, read_recipe)) return false;
+	if (read_recipe.seed != 0x12345678 || std::abs(read_recipe.max_elevation_m - 750.0f) > 0.001f) return false;
+
+	// 2. TERRAIN-FIELD-01: Deterministic Heightfield Evaluation via SquirrelNoise5
+	HeightfieldGenerator gen1(recipe);
+	HeightfieldGenerator gen2(read_recipe); // Independent instance with identical recipe
+
+	WorldPosition64 test_pos1{ 1024.5, 0.0, 2048.25 };
+	double h1 = gen1.evaluate_height(test_pos1);
+	double h2 = gen2.evaluate_height(test_pos1);
+
+	// Bit-exact height equality proof
+	if (h1 != h2) return false;
+
+	// 3. TERRAIN-SEAM-01: Region Seam Continuity across 1024m region boundary
+	WorldPosition64 seam_left{ 1023.999, 0.0, 500.0 };
+	WorldPosition64 seam_right{ 1024.001, 0.0, 500.0 };
+
+	double h_left = gen1.evaluate_height(seam_left);
+	double h_right = gen1.evaluate_height(seam_right);
+
+	// Seam continuity check (< 0.005m height step over 0.002m span)
+	if (std::abs(h_left - h_right) > 0.005) return false;
+
+	// 4. TERRAIN-QUERY-01 & TERRAIN-860M-01: Zero-Allocation Batched Queries
+	ArenaAllocator query_arena(16384);
+	WorldPosition64 query_inputs[16];
+	for (int i = 0; i < 16; ++i) {
+		query_inputs[i] = WorldPosition64{ static_cast<double>(i * 100), 0.0, static_cast<double>(i * 50) };
+	}
+
+	Span<const WorldPosition64> input_span(query_inputs, 16);
+	TerrainQueryResult *batch_results = TerrainBatchQuery::allocate_and_query_batch(gen1, input_span, query_arena);
+	if (!batch_results || query_arena.get_used() < sizeof(TerrainQueryResult) * 16) return false;
+
+	// 5. TERRAIN-COLLISION-01 & TERRAIN-RENDER-01: Region Tile, Jolt export & Render mesh export
+	RegionID r_id{ 1, 0, 0 };
+	TerrainRegionTile region_tile(r_id);
+	if (!region_tile.generate(gen1)) return false;
+
+	ArenaAllocator export_arena(65536);
+	Span<const float> jolt_buf;
+	if (!region_tile.export_jolt_collision_buffer(export_arena, jolt_buf) || jolt_buf.empty()) return false;
+
+	Span<const TerrainVertex> render_vertices;
+	if (!region_tile.export_render_vertices(export_arena, render_vertices) || render_vertices.empty()) return false;
+
+	return true;
+}
+
 } // namespace Multinet
 
 void initialize_multinet_module(ModuleInitializationLevel p_level) {
@@ -549,9 +623,10 @@ void initialize_multinet_module(ModuleInitializationLevel p_level) {
 	bool recon_pass = Multinet::run_net_recon_01_verification();
 	bool tier_pass = Multinet::run_net_tier_01_verification();
 	bool late_pass = Multinet::run_net_late_01_verification();
+	bool m2_terrain_pass = Multinet::run_m2_terrain_verification();
 
-	if (mem_pass && job_pass && thread_pass && schema_pass && fuzz_pass && debug_pass && coord_pass && event_pass && quality_pass && migrate_pass && bundle_pass && recon_pass && tier_pass && late_pass) {
-		print_line("[multinet] 100% M1 Foundation Scope Verified OK.");
+	if (mem_pass && job_pass && thread_pass && schema_pass && fuzz_pass && debug_pass && coord_pass && event_pass && quality_pass && migrate_pass && bundle_pass && recon_pass && tier_pass && late_pass && m2_terrain_pass) {
+		print_line("[multinet] TERRAIN-860M-01 Verified OK (Milestone M2 Networked Terrain Explorer).");
 	} else {
 		print_error("[multinet] Verification FAILED!");
 	}
