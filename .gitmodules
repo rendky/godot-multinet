@@ -1,0 +1,3 @@
+[submodule "multinet_ext/godot-cpp"]
+	path = multinet_ext/godot-cpp
+	url = https://github.com/godotengine/godot-cpp.git

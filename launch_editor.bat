@@ -1,0 +1,3 @@
+@echo off
+echo Opening Project-Nations directly in custom Godot Editor...
+start "" "%~dp0bin\godot.windows.editor.dev.x86_64.exe" --path "D:\Projects\Games\Project-Nations" -e
