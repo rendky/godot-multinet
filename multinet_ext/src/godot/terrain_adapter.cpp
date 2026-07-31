@@ -2,213 +2,104 @@
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/classes/engine.hpp>
-#include "multinet/core/memory/arena_allocator.h"
+#include <godot_cpp/classes/viewport.hpp>
+#include <godot_cpp/classes/camera3d.hpp>
+#include <godot_cpp/classes/world3d.hpp>
 
 namespace godot {
 
-MultinetTerrainChunk3D::MultinetTerrainChunk3D() {
-	mesh_instance = memnew(MeshInstance3D);
-	mesh_instance->set_name("TerrainMesh");
-	add_child(mesh_instance);
+MultinetBCCMNode3D::MultinetBCCMNode3D() {
+}
 
-	static_body = memnew(StaticBody3D);
-	static_body->set_name("TerrainStaticBody");
-	add_child(static_body);
+MultinetBCCMNode3D::~MultinetBCCMNode3D() {
+	free_rendering();
+}
 
-	collision_shape = memnew(CollisionShape3D);
-	collision_shape->set_name("TerrainCollisionShape");
-	static_body->add_child(collision_shape);
-} // GDExtension fast compile test
+void MultinetBCCMNode3D::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("set_seed", "seed"), &MultinetBCCMNode3D::set_seed);
+	ClassDB::bind_method(D_METHOD("get_seed"), &MultinetBCCMNode3D::get_seed);
+	ClassDB::bind_method(D_METHOD("set_min_elevation_m", "min_elevation_m"), &MultinetBCCMNode3D::set_min_elevation_m);
+	ClassDB::bind_method(D_METHOD("get_min_elevation_m"), &MultinetBCCMNode3D::get_min_elevation_m);
+	ClassDB::bind_method(D_METHOD("set_max_elevation_m", "max_elevation_m"), &MultinetBCCMNode3D::set_max_elevation_m);
+	ClassDB::bind_method(D_METHOD("get_max_elevation_m"), &MultinetBCCMNode3D::get_max_elevation_m);
+	ClassDB::bind_method(D_METHOD("set_frequency", "frequency"), &MultinetBCCMNode3D::set_frequency);
+	ClassDB::bind_method(D_METHOD("get_frequency"), &MultinetBCCMNode3D::get_frequency);
+	ClassDB::bind_method(D_METHOD("set_camera_target", "path"), &MultinetBCCMNode3D::set_camera_target);
+	ClassDB::bind_method(D_METHOD("get_camera_target"), &MultinetBCCMNode3D::get_camera_target);
 
-void MultinetTerrainChunk3D::_bind_methods() {
-	ClassDB::bind_method(D_METHOD("set_cell_x", "cell_x"), &MultinetTerrainChunk3D::set_cell_x);
-	ClassDB::bind_method(D_METHOD("get_cell_x"), &MultinetTerrainChunk3D::get_cell_x);
-	ClassDB::bind_method(D_METHOD("set_cell_z", "cell_z"), &MultinetTerrainChunk3D::set_cell_z);
-	ClassDB::bind_method(D_METHOD("get_cell_z"), &MultinetTerrainChunk3D::get_cell_z);
+	ClassDB::bind_method(D_METHOD("get_candidate_count", "lod"), &MultinetBCCMNode3D::get_candidate_count);
+	ClassDB::bind_method(D_METHOD("get_visible_count", "lod"), &MultinetBCCMNode3D::get_visible_count);
+	ClassDB::bind_method(D_METHOD("get_submitted_streams"), &MultinetBCCMNode3D::get_submitted_streams);
 
-	ClassDB::bind_method(D_METHOD("set_seed", "seed"), &MultinetTerrainChunk3D::set_seed);
-	ClassDB::bind_method(D_METHOD("get_seed"), &MultinetTerrainChunk3D::get_seed);
-	ClassDB::bind_method(D_METHOD("set_min_elevation_m", "min_elevation_m"), &MultinetTerrainChunk3D::set_min_elevation_m);
-	ClassDB::bind_method(D_METHOD("get_min_elevation_m"), &MultinetTerrainChunk3D::get_min_elevation_m);
-	ClassDB::bind_method(D_METHOD("set_max_elevation_m", "max_elevation_m"), &MultinetTerrainChunk3D::set_max_elevation_m);
-	ClassDB::bind_method(D_METHOD("get_max_elevation_m"), &MultinetTerrainChunk3D::get_max_elevation_m);
-
-	ClassDB::bind_method(D_METHOD("generate_chunk"), &MultinetTerrainChunk3D::generate_chunk);
-
-	ClassDB::bind_method(D_METHOD("set_frequency", "frequency"), &MultinetTerrainChunk3D::set_frequency);
-	ClassDB::bind_method(D_METHOD("get_frequency"), &MultinetTerrainChunk3D::get_frequency);
-
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "cell_x"), "set_cell_x", "get_cell_x");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "cell_z"), "set_cell_z", "get_cell_z");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "seed"), "set_seed", "get_seed");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "min_elevation_m", PROPERTY_HINT_RANGE, "-10000.0, 10000.0, 1.0"), "set_min_elevation_m", "get_min_elevation_m");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "max_elevation_m", PROPERTY_HINT_RANGE, "-10000.0, 10000.0, 1.0"), "set_max_elevation_m", "get_max_elevation_m");
-	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "frequency", PROPERTY_HINT_RANGE, "0.0001, 1.0, 0.0001, exp"), "set_frequency", "get_frequency");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "frequency", PROPERTY_HINT_RANGE, "0.0, 100.0, 0.01"), "set_frequency", "get_frequency");
+	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "camera_target"), "set_camera_target", "get_camera_target");
 }
 
-void MultinetTerrainChunk3D::_notification(int p_what) {
+void MultinetBCCMNode3D::_notification(int p_what) {
 	if (p_what == NOTIFICATION_READY) {
-		generate_chunk();
-	}
-}
-
-void MultinetTerrainChunk3D::set_cell_x(int64_t p_val) {
-	if (cell_x == p_val) return;
-	cell_x = p_val;
-	generate_chunk();
-}
-
-int64_t MultinetTerrainChunk3D::get_cell_x() const {
-	return cell_x;
-}
-
-void MultinetTerrainChunk3D::set_cell_z(int64_t p_val) {
-	if (cell_z == p_val) return;
-	cell_z = p_val;
-	generate_chunk();
-}
-
-int64_t MultinetTerrainChunk3D::get_cell_z() const {
-	return cell_z;
-}
-
-void MultinetTerrainChunk3D::set_seed(uint32_t p_seed) {
-	if (seed == p_seed) return;
-	seed = p_seed;
-	generate_chunk();
-}
-
-uint32_t MultinetTerrainChunk3D::get_seed() const {
-	return seed;
-}
-
-void MultinetTerrainChunk3D::set_min_elevation_m(float p_elev) {
-	if (min_elevation_m == p_elev) return;
-	min_elevation_m = p_elev;
-	generate_chunk();
-}
-
-float MultinetTerrainChunk3D::get_min_elevation_m() const {
-	return min_elevation_m;
-}
-
-void MultinetTerrainChunk3D::set_max_elevation_m(float p_elev) {
-	if (max_elevation_m == p_elev) return;
-	max_elevation_m = p_elev;
-	generate_chunk();
-}
-
-float MultinetTerrainChunk3D::get_max_elevation_m() const {
-	return max_elevation_m;
-}
-
-void MultinetTerrainChunk3D::set_frequency(float p_freq) {
-	if (continental_frequency == p_freq) return;
-	continental_frequency = p_freq;
-	generate_chunk();
-}
-
-float MultinetTerrainChunk3D::get_frequency() const {
-	return continental_frequency;
-}
-
-void MultinetTerrainChunk3D::generate_chunk() {
-	using namespace Multinet;
-
-	TerrainRecipe recipe{};
-	recipe.seed = seed;
-	recipe.min_elevation_m = min_elevation_m;
-	recipe.max_elevation_m = max_elevation_m;
-	recipe.continental_frequency = continental_frequency;
-
-	HeightfieldGenerator generator(recipe);
-
-	RegionID r_id{ cell_x, cell_y, cell_z };
-	TerrainRegionTile tile(r_id);
-	if (!tile.generate(generator)) {
-		return;
-	}
-
-	ArenaAllocator export_arena(131072);
-	Multinet::Span<const TerrainVertex> vert_span;
-	if (!tile.export_render_vertices(export_arena, vert_span) || vert_span.empty()) {
-		return;
-	}
-
-	constexpr size_t grid_dim = 33;
-	PackedVector3Array godot_vertices;
-	PackedVector3Array godot_normals;
-	PackedInt32Array godot_indices;
-
-	godot_vertices.resize(vert_span.size());
-	godot_normals.resize(vert_span.size());
-
-	for (size_t i = 0; i < vert_span.size(); ++i) {
-		const auto &v = vert_span[i];
-		// Center vertex grid around node origin (-512m to +512m)
-		godot_vertices.set(static_cast<int>(i), Vector3(v.x - 512.0f, v.y, v.z - 512.0f));
-
-		// Evaluate smooth analytical normal using HeightfieldGenerator
-		double world_x = (static_cast<double>(cell_x) * 1024.0) + static_cast<double>(v.x);
-		double world_z = (static_cast<double>(cell_z) * 1024.0) + static_cast<double>(v.z);
-		SurfaceNormal norm = generator.evaluate_normal(world_x, world_z);
-		godot_normals.set(static_cast<int>(i), Vector3(static_cast<float>(norm.nx), static_cast<float>(norm.ny), static_cast<float>(norm.nz)));
-	}
-
-	// Generate triangles
-	for (size_t z = 0; z < grid_dim - 1; ++z) {
-		for (size_t x = 0; x < grid_dim - 1; ++x) {
-			int32_t v00 = static_cast<int32_t>(z * grid_dim + x);
-			int32_t v10 = static_cast<int32_t>(z * grid_dim + (x + 1));
-			int32_t v01 = static_cast<int32_t>((z + 1) * grid_dim + x);
-			int32_t v11 = static_cast<int32_t>((z + 1) * grid_dim + (x + 1));
-
-			godot_indices.push_back(v00);
-			godot_indices.push_back(v10);
-			godot_indices.push_back(v01);
-
-			godot_indices.push_back(v10);
-			godot_indices.push_back(v11);
-			godot_indices.push_back(v01);
+		init_rendering();
+		set_process(true);
+	} else if (p_what == NOTIFICATION_PROCESS) {
+		Camera3D *cam = nullptr;
+		if (!camera_target.is_empty()) {
+			Node *target = get_node_or_null(camera_target);
+			if (target) {
+				cam = Object::cast_to<Camera3D>(target);
+			}
 		}
-	}
-
-	Array mesh_arrays;
-	mesh_arrays.resize(Mesh::ARRAY_MAX);
-	mesh_arrays[Mesh::ARRAY_VERTEX] = godot_vertices;
-	mesh_arrays[Mesh::ARRAY_NORMAL] = godot_normals;
-	mesh_arrays[Mesh::ARRAY_INDEX] = godot_indices;
-
-	Ref<ArrayMesh> array_mesh;
-	array_mesh.instantiate();
-	array_mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, mesh_arrays);
-
-	mesh_instance->set_mesh(array_mesh);
-
-	// Physics Collision Setup via HeightMapShape3D
-	Multinet::Span<const float> jolt_heights;
-	if (tile.export_jolt_collision_buffer(export_arena, jolt_heights) && !jolt_heights.empty()) {
-		PackedFloat32Array shape_heights;
-		shape_heights.resize(static_cast<int>(jolt_heights.size()));
-		for (size_t i = 0; i < jolt_heights.size(); ++i) {
-			shape_heights.set(static_cast<int>(i), jolt_heights[i]);
+		if (!cam && get_viewport()) {
+			cam = get_viewport()->get_camera_3d();
 		}
+		
+		if (cam) {
+			if (!bccm_renderer.initialized() && get_world_3d().is_valid()) {
+				bccm_renderer.initialize(get_world_3d()->get_scenario());
+			}
+			multinet::rendering::BCCMTerrainSettings settings;
+			settings.seed = seed;
+			settings.min_elevation_m = min_elevation_m;
+			settings.max_elevation_m = max_elevation_m;
+			settings.continental_frequency = continental_frequency;
+			settings.is_visible = is_visible_in_tree();
 
-		Ref<HeightMapShape3D> height_shape;
-		height_shape.instantiate();
-		height_shape->set_map_width(static_cast<int>(grid_dim));
-		height_shape->set_map_depth(static_cast<int>(grid_dim));
-		height_shape->set_map_data(shape_heights);
-
-		collision_shape->set_shape(height_shape);
-
-		// Align collision shape centered at node origin (0,0,0) matching mesh (-512..+512)
-		Transform3D shape_transform;
-		shape_transform.basis.scale(Vector3(32.0f, 1.0f, 32.0f));
-		collision_shape->set_transform(shape_transform);
+			bccm_renderer.update(cam, settings);
+		}
+	} else if (p_what == NOTIFICATION_EXIT_TREE) {
+		free_rendering();
 	}
-
-	set_position(Vector3(static_cast<float>(cell_x * 1024), 0.0f, static_cast<float>(cell_z * 1024)));
 }
+
+void MultinetBCCMNode3D::init_rendering() {
+	if (bccm_renderer.initialized()) return;
+	if (get_world_3d().is_valid()) {
+		bccm_renderer.initialize(get_world_3d()->get_scenario());
+	}
+}
+
+void MultinetBCCMNode3D::free_rendering() {
+	bccm_renderer.cleanup();
+}
+
+void MultinetBCCMNode3D::set_seed(uint32_t p_seed) { seed = p_seed; }
+uint32_t MultinetBCCMNode3D::get_seed() const { return seed; }
+
+void MultinetBCCMNode3D::set_min_elevation_m(float p_elev) { min_elevation_m = p_elev; }
+float MultinetBCCMNode3D::get_min_elevation_m() const { return min_elevation_m; }
+
+void MultinetBCCMNode3D::set_max_elevation_m(float p_elev) { max_elevation_m = p_elev; }
+float MultinetBCCMNode3D::get_max_elevation_m() const { return max_elevation_m; }
+
+void MultinetBCCMNode3D::set_frequency(float p_freq) { continental_frequency = p_freq; }
+float MultinetBCCMNode3D::get_frequency() const { return continental_frequency; }
+
+void MultinetBCCMNode3D::set_camera_target(const godot::NodePath &p_path) { camera_target = p_path; }
+godot::NodePath MultinetBCCMNode3D::get_camera_target() const { return camera_target; }
+
+uint32_t MultinetBCCMNode3D::get_candidate_count(int p_lod) const { return bccm_renderer.get_candidate_count(static_cast<uint8_t>(p_lod)); }
+uint32_t MultinetBCCMNode3D::get_visible_count(int p_lod) const { return bccm_renderer.get_visible_count(static_cast<uint8_t>(p_lod)); }
+uint32_t MultinetBCCMNode3D::get_submitted_streams() const { return bccm_renderer.get_submitted_streams(); }
 
 } // namespace godot

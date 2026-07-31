@@ -98,11 +98,57 @@ struct CanonicalEvent {
 
 class LocalCanonMock {
 private:
-	std::unordered_map<uint64_t, CanonCommitResult> idempotency_store;
-	std::vector<CanonicalEvent> event_log;
+	static constexpr size_t MAX_LOG_EVENTS = 1024;
+	static constexpr size_t IDEMPOTENCY_CAPACITY = 512;
+
+	struct IdempotencyEntry {
+		uint64_t key{ 0 };
+		CanonCommitResult result{};
+		bool is_active{ false };
+	};
+
+	std::array<IdempotencyEntry, IDEMPOTENCY_CAPACITY> idempotency_store{};
+	std::array<CanonicalEvent, MAX_LOG_EVENTS> event_log{};
+	
+	size_t event_head{ 0 };
+	size_t event_count{ 0 };
+	
 	uint64_t global_sequence{ 0 };
 	uint64_t last_event_hash{ 0 };
 	uint32_t current_scope_version{ 0 };
+
+	[[nodiscard]] CanonCommitResult* find_idempotency_result(uint64_t p_key) noexcept {
+		size_t start_idx = p_key % IDEMPOTENCY_CAPACITY;
+		for (size_t i = 0; i < IDEMPOTENCY_CAPACITY; ++i) {
+			size_t idx = (start_idx + i) % IDEMPOTENCY_CAPACITY;
+			if (!idempotency_store[idx].is_active) {
+				return nullptr; // Not found
+			}
+			if (idempotency_store[idx].key == p_key) {
+				return &idempotency_store[idx].result;
+			}
+		}
+		return nullptr;
+	}
+
+	void store_idempotency(uint64_t p_key, const CanonCommitResult& p_result) noexcept {
+		size_t start_idx = p_key % IDEMPOTENCY_CAPACITY;
+		for (size_t i = 0; i < IDEMPOTENCY_CAPACITY; ++i) {
+			size_t idx = (start_idx + i) % IDEMPOTENCY_CAPACITY;
+			// Allow overwriting if it's inactive OR just overwrite the oldest/closest
+			// For a true ring buffer, we'd evict, but this is a mock. We will just overwrite.
+			if (!idempotency_store[idx].is_active || idempotency_store[idx].key == p_key) {
+				idempotency_store[idx].key = p_key;
+				idempotency_store[idx].result = p_result;
+				idempotency_store[idx].is_active = true;
+				return;
+			}
+		}
+		// If full, force overwrite start_idx
+		idempotency_store[start_idx].key = p_key;
+		idempotency_store[start_idx].result = p_result;
+		idempotency_store[start_idx].is_active = true;
+	}
 
 public:
 	LocalCanonMock() = default;
@@ -110,9 +156,8 @@ public:
 	CanonCommitResult process_commit_request(const CanonCommitRequest &p_request) noexcept {
 		// Rule 12.4: Idempotency Enforcement - Repeated commit requests return recorded result
 		if (p_request.proposal.idempotency_key != 0) {
-			auto it = idempotency_store.find(p_request.proposal.idempotency_key);
-			if (it != idempotency_store.end()) {
-				return it->second;
+			if (CanonCommitResult* cached = find_idempotency_result(p_request.proposal.idempotency_key)) {
+				return *cached;
 			}
 		}
 
@@ -154,11 +199,13 @@ public:
 		evt.authentication = result.authentication;
 		evt.canonical_sequence = global_sequence;
 
-		event_log.push_back(evt);
+		event_log[event_head] = evt;
+		event_head = (event_head + 1) % MAX_LOG_EVENTS;
+		if (event_count < MAX_LOG_EVENTS) event_count++;
 
 		// Record for Idempotency
 		if (p_request.proposal.idempotency_key != 0) {
-			idempotency_store[p_request.proposal.idempotency_key] = result;
+			store_idempotency(p_request.proposal.idempotency_key, result);
 		}
 
 		return result;
@@ -166,8 +213,20 @@ public:
 
 	[[nodiscard]] uint64_t get_global_sequence() const noexcept { return global_sequence; }
 	[[nodiscard]] uint32_t get_scope_version() const noexcept { return current_scope_version; }
-	[[nodiscard]] size_t get_log_count() const noexcept { return event_log.size(); }
-	[[nodiscard]] const std::vector<CanonicalEvent> &get_event_log() const noexcept { return event_log; }
+	[[nodiscard]] size_t get_log_count() const noexcept { return event_count; }
+
+	// Ring buffer chronological access (idx 0 is oldest available, up to event_count-1)
+	[[nodiscard]] const CanonicalEvent* get_event(size_t p_index) const noexcept {
+		if (p_index >= event_count) return nullptr;
+		
+		size_t start_idx = 0;
+		if (event_count == MAX_LOG_EVENTS) {
+			start_idx = event_head; // Oldest is at head if full
+		}
+		
+		size_t real_idx = (start_idx + p_index) % MAX_LOG_EVENTS;
+		return &event_log[real_idx];
+	}
 };
 
 } // namespace Multinet

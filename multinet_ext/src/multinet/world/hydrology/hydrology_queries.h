@@ -119,6 +119,13 @@ struct ShorelineSegmentRecord {
 	uint32_t state_version{ 1 };
 };
 
+[[nodiscard]] inline float calculate_water_depth(double p_water_surface_elevation_m, double p_terrain_bed_elevation_m) noexcept {
+	if (p_water_surface_elevation_m <= p_terrain_bed_elevation_m) {
+		return 0.0f; // Ground is above water surface -> dry bed
+	}
+	return static_cast<float>(p_water_surface_elevation_m - p_terrain_bed_elevation_m);
+}
+
 } // namespace Multinet
 
 #endif // MULTINET_HYDROLOGY_QUERIES_H

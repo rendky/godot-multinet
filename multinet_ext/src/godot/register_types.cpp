@@ -4,6 +4,9 @@
 #include <godot_cpp/godot.hpp>
 
 #include "godot/terrain_adapter.h"
+#include "godot/water_adapter.h"
+#include "godot/structure_adapter.h"
+#include "godot/settlement_adapter.h"
 
 using namespace godot;
 
@@ -12,7 +15,10 @@ void initialize_multinet_module(ModuleInitializationLevel p_level) {
 		return;
 	}
 
-	ClassDB::register_class<MultinetTerrainChunk3D>();
+	ClassDB::register_class<MultinetBCCMNode3D>();
+	ClassDB::register_class<MultinetWaterBody3D>();
+	ClassDB::register_class<MultinetStructureNode3D>();
+	ClassDB::register_class<MultinetSettlementNode3D>();
 }
 
 void uninitialize_multinet_module(ModuleInitializationLevel p_level) {

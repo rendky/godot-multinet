@@ -2,49 +2,35 @@
 #define MULTINET_TERRAIN_ADAPTER_H
 
 #include <godot_cpp/classes/node3d.hpp>
-#include <godot_cpp/classes/mesh_instance3d.hpp>
-#include <godot_cpp/classes/static_body3d.hpp>
-#include <godot_cpp/classes/collision_shape3d.hpp>
-#include <godot_cpp/classes/array_mesh.hpp>
-#include <godot_cpp/classes/height_map_shape3d.hpp>
-
-#include "multinet/world/terrain/heightfield_generator.h"
-#include "multinet/world/terrain/region_tile.h"
-#include "multinet/world/terrain/terrain_recipe.h"
+#include "multinet/rendering/terrain/block_clipmap/block_clipmap_renderer.h"
 
 namespace godot {
 
-class MultinetTerrainChunk3D : public Node3D {
-	GDCLASS(MultinetTerrainChunk3D, Node3D);
+class Camera3D;
+
+class MultinetBCCMNode3D : public Node3D {
+	GDCLASS(MultinetBCCMNode3D, Node3D);
 
 private:
-	int64_t cell_x{ 0 };
-	int64_t cell_y{ 0 };
-	int64_t cell_z{ 0 };
+	uint32_t seed{ 1337 };
+	float min_elevation_m{ -100.0f };
+	float max_elevation_m{ 2000.0f };
+	float continental_frequency{ 50.0f };
 
-	uint32_t seed{ 0xDEADBEEF };
-	float min_elevation_m{ -200.0f };
-	float max_elevation_m{ 500.0f };
-	float continental_frequency{ 0.003f };
+	godot::NodePath camera_target;
 
-	MeshInstance3D *mesh_instance{ nullptr };
-	StaticBody3D *static_body{ nullptr };
-	CollisionShape3D *collision_shape{ nullptr };
+	multinet::rendering::BlockClipmapRenderer bccm_renderer;
+
+	void init_rendering();
+	void free_rendering();
 
 protected:
 	static void _bind_methods();
-
-public:
-	MultinetTerrainChunk3D();
-	~MultinetTerrainChunk3D() = default;
-
 	void _notification(int p_what);
 
-	void set_cell_x(int64_t p_val);
-	int64_t get_cell_x() const;
-
-	void set_cell_z(int64_t p_val);
-	int64_t get_cell_z() const;
+public:
+	MultinetBCCMNode3D();
+	~MultinetBCCMNode3D();
 
 	void set_seed(uint32_t p_seed);
 	uint32_t get_seed() const;
@@ -58,7 +44,12 @@ public:
 	void set_frequency(float p_freq);
 	float get_frequency() const;
 
-	void generate_chunk();
+	void set_camera_target(const godot::NodePath &p_path);
+	godot::NodePath get_camera_target() const;
+
+	uint32_t get_candidate_count(int p_lod) const;
+	uint32_t get_visible_count(int p_lod) const;
+	uint32_t get_submitted_streams() const;
 };
 
 } // namespace godot
