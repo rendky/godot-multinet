@@ -52,14 +52,15 @@ struct FrustumPlanes {
 
 		for (int i = 0; i < 6; ++i) {
 			const godot::Plane &p = planes[i];
-			// Find the vertex of the AABB that is *least* in the direction of the outward normal
+			// Godot 4 get_frustum() planes have outward-pointing normals.
+			// Find the N-vertex (the vertex least in the direction of the outward normal).
 			godot::Vector3 n_vertex(
 				p.normal.x >= 0 ? min_p.x : max_p.x,
 				p.normal.y >= 0 ? min_p.y : max_p.y,
 				p.normal.z >= 0 ? min_p.z : max_p.z
 			);
 			
-			// If even the most-inward vertex is in the positive half-space (outside), cull it
+			// If even the most-inward (N-vertex) is in the positive half-space (outside), cull it.
 			if (p.distance_to(n_vertex) > 0.0f) {
 				return false;
 			}

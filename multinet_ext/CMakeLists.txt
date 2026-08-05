@@ -15,12 +15,13 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
+file(GLOB_RECURSE ALL_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
+list(FILTER ALL_SOURCES EXCLUDE REGEX "src/tests/.*")
 
-add_library(multinet SHARED ${SOURCES})
-
+# GDExtension DLL target
+add_library(multinet SHARED ${ALL_SOURCES})
 target_link_libraries(multinet PRIVATE godot::cpp)
 
 # Destination directory in game project
@@ -31,3 +32,12 @@ add_custom_command(TARGET multinet POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:multinet> "${OUTPUT_DIR}/multinet.windows.debug.x86_64.dll"
     COMMENT "Copying compiled GDExtension DLL to Project-Nations..."
 )
+
+# Standalone CPU test fixture — excludes Godot engine adapter bindings (src/godot/.*)
+set(CORE_SOURCES ${ALL_SOURCES})
+list(FILTER CORE_SOURCES EXCLUDE REGEX "src/godot/.*")
+
+add_executable(bccm_surface_edge_fixture src/tests/bccm_surface_edge_fixture.cpp ${CORE_SOURCES})
+target_compile_definitions(bccm_surface_edge_fixture PRIVATE MULTINET_TEST DEBUG_ENABLED)
+target_link_libraries(bccm_surface_edge_fixture PRIVATE godot::cpp)
+

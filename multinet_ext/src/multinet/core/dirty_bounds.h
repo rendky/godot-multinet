@@ -2,9 +2,7 @@
 #define MULTINET_DIRTY_BOUNDS_H
 
 #include "multinet/core/coordinates.h"
-
-#include <algorithm>
-#include <cstdint>
+#include "multinet/core/spatial/surface_bounds.h"
 
 namespace Multinet {
 

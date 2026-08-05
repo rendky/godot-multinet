@@ -1,0 +1,27 @@
+[gd_scene format=3 uid="uid://cjtgyqsndbgeq"]
+
+[ext_resource type="Script" uid="uid://wp5smoke" path="res://wp5_smoke_publisher.gd" id="2_smoke"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_r3yhw"]
+
+[node name="Node3D" type="Node3D" unique_id=1546033314]
+script = ExtResource("2_smoke")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1434524300]
+transform = Transform3D(-0.8660254, -0.43301278, 0.25, 0, 0.49999997, 0.86602545, -0.50000006, 0.75, -0.43301266, 0, 0, 0)
+shadow_enabled = true
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=29560808]
+transform = Transform3D(0.15205373, 0.43644005, -0.8867918, 0, 0.89722455, 0.44157457, 0.98837227, -0.06714306, 0.13642633, -9307.499, 5122.487, -81.49179)
+far = 1000000.0
+
+[node name="MultinetBCCMNode3D" type="MultinetBCCMNode3D" parent="." unique_id=1593096605]
+seed = 2
+min_elevation_m = -10000.0
+max_elevation_m = 8000.0
+frequency = 0.8
+camera_target = NodePath("../../../../../../../../../@Node3DEditor@10918/@HSplitContainer@10238/@HSplitContainer@10240/@VSplitContainer@10242/@Node3DEditorViewportContainer@10249/@SplitContainer@10248/@SplitContainer@10246/@Node3DEditorViewport@10318/@SubViewportContainer@10250/@SubViewport@10251/@Camera3D@10253")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=781762912]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 57.40698)
+mesh = SubResource("BoxMesh_r3yhw")

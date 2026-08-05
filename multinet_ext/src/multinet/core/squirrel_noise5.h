@@ -10,47 +10,79 @@ namespace Multinet {
 // Identical bits/seed/version match across C++, SIMD, Godot & shaders.
 // ============================================================================
 
-constexpr uint32_t SQ5_BIT_NOISE1 = 0xD6E8FEB8ULL;
-constexpr uint32_t SQ5_BIT_NOISE2 = 0x9656979DULL;
-constexpr uint32_t SQ5_BIT_NOISE3 = 0x5D588B65ULL;
-constexpr uint32_t SQ5_BIT_NOISE4 = 0xE16B0127ULL;
-constexpr uint32_t SQ5_BIT_NOISE5 = 0x2A01A19CULL;
+enum class DeterministicAlgorithm : uint32_t {
+    SquirrelNoise5U2V1 = 0x53513501u,
+    SquirrelNoise5U3V1 = 0x53513502u
+};
 
-[[nodiscard]] inline constexpr uint32_t squirrel_noise5(int32_t p_position_1d, uint32_t p_seed) noexcept {
-	uint32_t mangled = static_cast<uint32_t>(p_position_1d);
-	mangled *= SQ5_BIT_NOISE1;
-	mangled += p_seed;
-	mangled ^= (mangled >> 9);
-	mangled += SQ5_BIT_NOISE2;
-	mangled ^= (mangled >> 11);
-	mangled *= SQ5_BIT_NOISE3;
-	mangled ^= (mangled >> 13);
-	mangled += SQ5_BIT_NOISE4;
-	mangled ^= (mangled >> 17);
-	mangled *= SQ5_BIT_NOISE5;
-	mangled ^= (mangled >> 19);
-	return mangled;
+[[nodiscard]] inline constexpr uint32_t squirrel_noise5_u2_v1(uint32_t x_bits, uint32_t y_bits, uint32_t seed) noexcept {
+    constexpr uint32_t BIT_NOISE_1 = 0xD2A80A3Fu;
+    constexpr uint32_t BIT_NOISE_2 = 0xA884F197u;
+    constexpr uint32_t BIT_NOISE_3 = 0x6C736F4Bu;
+    constexpr uint32_t BIT_NOISE_4 = 0xB79F3ABBu;
+    constexpr uint32_t BIT_NOISE_5 = 0x1B56C4F5u;
+
+    uint32_t bits = x_bits;
+
+    bits *= BIT_NOISE_1;
+    bits += seed;
+    bits ^= bits >> 9u;
+
+    bits += y_bits;
+    bits ^= bits >> 11u;
+
+    bits *= BIT_NOISE_2;
+    bits ^= bits >> 13u;
+
+    bits *= BIT_NOISE_3;
+    bits ^= bits >> 15u;
+
+    bits *= BIT_NOISE_4;
+    bits ^= bits >> 17u;
+
+    bits *= BIT_NOISE_5;
+    return bits;
 }
 
-[[nodiscard]] inline constexpr uint32_t squirrel_noise5_2d(int32_t p_x, int32_t p_y, uint32_t p_seed) noexcept {
-	constexpr int32_t PRIME_Y = 198491317;
-	return squirrel_noise5(p_x + (p_y * PRIME_Y), p_seed);
+[[nodiscard]] inline constexpr uint32_t squirrel_noise5_i2_v1(int32_t x, int32_t y, uint32_t seed) noexcept {
+    return squirrel_noise5_u2_v1(
+        static_cast<uint32_t>(x),
+        static_cast<uint32_t>(y),
+        seed
+    );
 }
 
-[[nodiscard]] inline constexpr uint32_t squirrel_noise5_3d(int32_t p_x, int32_t p_y, int32_t p_z, uint32_t p_seed) noexcept {
-	constexpr int32_t PRIME_Y = 198491317;
-	constexpr int32_t PRIME_Z = 6542989;
-	return squirrel_noise5(p_x + (p_y * PRIME_Y) + (p_z * PRIME_Z), p_seed);
+[[nodiscard]] inline constexpr uint32_t squirrel_noise5_u3_v1(uint32_t x_bits, uint32_t y_bits, uint32_t z_bits, uint32_t seed) noexcept {
+    constexpr uint32_t SQUIRREL_U3_DOMAIN_V1 = 0x55335631u;
+
+    uint32_t z_seed = squirrel_noise5_u2_v1(
+        z_bits,
+        SQUIRREL_U3_DOMAIN_V1,
+        seed
+    );
+
+    return squirrel_noise5_u2_v1(
+        x_bits,
+        y_bits,
+        z_seed
+    );
 }
 
-[[nodiscard]] inline constexpr float squirrel_noise5_zero_to_one(int32_t p_position_1d, uint32_t p_seed) noexcept {
-	constexpr double ONE_OVER_MAX = 1.0 / 4294967295.0;
-	return static_cast<float>(squirrel_noise5(p_position_1d, p_seed) * ONE_OVER_MAX);
+[[nodiscard]] inline constexpr uint32_t squirrel_noise5_i3_v1(int32_t x, int32_t y, int32_t z, uint32_t seed) noexcept {
+    return squirrel_noise5_u3_v1(
+        static_cast<uint32_t>(x),
+        static_cast<uint32_t>(y),
+        static_cast<uint32_t>(z),
+        seed
+    );
 }
 
-[[nodiscard]] inline constexpr float squirrel_noise5_2d_zero_to_one(int32_t p_x, int32_t p_y, uint32_t p_seed) noexcept {
-	constexpr double ONE_OVER_MAX = 1.0 / 4294967295.0;
-	return static_cast<float>(squirrel_noise5_2d(p_x, p_y, p_seed) * ONE_OVER_MAX);
+[[nodiscard]] inline constexpr uint32_t squirrel_channel_seed_v1(uint32_t owner_seed, uint32_t channel_id, uint32_t recipe_version) noexcept {
+    return squirrel_noise5_u2_v1(channel_id, recipe_version, owner_seed);
+}
+
+[[nodiscard]] inline constexpr float squirrel_u01_24_v1(uint32_t bits) noexcept {
+    return static_cast<float>(bits >> 8u) * 0x1.0p-24f;
 }
 
 } // namespace Multinet

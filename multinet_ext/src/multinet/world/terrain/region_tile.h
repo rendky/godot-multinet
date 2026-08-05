@@ -6,24 +6,14 @@
 #include "multinet/core/span.h"
 #include "multinet/core/io/bundle_io.h"
 #include "multinet/core/memory/arena_allocator.h"
-#include "multinet/world/terrain/heightfield_generator.h"
+#include "multinet/world/terrain/terrain_queries.h"
+#include "multinet/world/terrain/terrain_region_key.h"
 
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 
 namespace Multinet {
-
-// ============================================================================
-// Gate: TERRAIN-COLLISION-01 (Asynchronous Jolt Heightfield Tile)
-// Gate: TERRAIN-STREAM-01 (HDD Streaming Locality Bundle Staging)
-// Gate: TERRAIN-RENDER-01 (LivingWorldRendering Coarse LOD Handoff)
-// ============================================================================
-
-struct RegionID {
-	int64_t cell_x{ 0 };
-	int64_t cell_y{ 0 };
-	int64_t cell_z{ 0 };
-};
 
 struct TerrainVertex {
 	float x{ 0.0f };
@@ -36,34 +26,79 @@ struct TerrainVertex {
 
 class TerrainRegionTile {
 private:
-	RegionID region_id{};
-	static constexpr size_t GRID_DIM = 33; // 33x33 sample grid for 1024m region (32 meter grid spacing)
+	SurfaceRegionID region_id{};
+	static constexpr size_t GRID_DIM = 33;
 	float heights[GRID_DIM * GRID_DIM]{};
-	DirtyBounds3D dirty_bounds{};
+	SurfaceNormal normals[GRID_DIM * GRID_DIM]{};
+	SurfaceBounds dirty_bounds{};
 	bool is_generated{ false };
+	float actual_spacing{ 0.0f };
 
 public:
 	TerrainRegionTile() = default;
 
-	explicit TerrainRegionTile(RegionID p_region) : region_id(p_region) {}
+	explicit TerrainRegionTile(SurfaceRegionID p_region) : region_id(p_region) {}
 
-	bool generate(const HeightfieldGenerator &p_generator) noexcept {
-		RegionPosition base_pos{ region_id.cell_x, region_id.cell_y, region_id.cell_z, 0.0f, 0.0f, 0.0f };
-		WorldPosition64 base_w = base_pos.to_world();
+	bool generate(const TerrainFieldEvaluator &p_evaluator, const WorldScaleManifest &p_scale) noexcept {
+		if (region_id.cell_u >= p_scale.regions_per_face_axis || region_id.cell_v >= p_scale.regions_per_face_axis) {
+			return false;
+		}
 
-		constexpr float spacing = 1024.0f / static_cast<float>(GRID_DIM - 1);
+		double H = static_cast<double>(p_scale.chart_half_extent_mm) * 0.001;
+		double R = p_scale.actual_region_extent_m;
+		double start_u = -H + static_cast<double>(region_id.cell_u) * R;
+		double start_v = -H + static_cast<double>(region_id.cell_v) * R;
+
+		double sample_spacing = R / static_cast<double>(GRID_DIM - 1);
+		actual_spacing = static_cast<float>(sample_spacing);
 
 		for (size_t z = 0; z < GRID_DIM; ++z) {
 			for (size_t x = 0; x < GRID_DIM; ++x) {
-				double wx = base_w.x + static_cast<double>(static_cast<float>(x) * spacing);
-				double wz = base_w.z + static_cast<double>(static_cast<float>(z) * spacing);
+				double u_offset = static_cast<double>(x) * sample_spacing;
+				double v_offset = static_cast<double>(z) * sample_spacing;
 
-				double h = p_generator.evaluate_height(wx, wz);
-				heights[z * GRID_DIM + x] = static_cast<float>(h);
+				// The last region must terminate at the positive chart boundary within declared floating tolerance
+				if (region_id.cell_u == p_scale.regions_per_face_axis - 1 && x == GRID_DIM - 1) {
+					u_offset = H - start_u;
+				}
+				if (region_id.cell_v == p_scale.regions_per_face_axis - 1 && z == GRID_DIM - 1) {
+					v_offset = H - start_v;
+				}
+
+				SurfacePosition64 pos{};
+				pos.face = region_id.face;
+				pos.u_m = start_u + u_offset;
+				pos.v_m = start_v + v_offset;
+				pos.altitude_m = 0.0;
+
+				TerrainHeightEvaluation result = p_evaluator.evaluate(pos, TerrainQueryFlags::Normals);
+				size_t idx = z * GRID_DIM + x;
+				heights[idx] = static_cast<float>(result.height);
+				normals[idx] = result.normal;
 			}
 		}
 
-		dirty_bounds.expand(base_pos);
+		SurfaceAddress corners[4];
+		corners[0].face = region_id.face;
+		corners[0].u_mm = static_cast<int64_t>(std::round(start_u * 1000.0));
+		corners[0].v_mm = static_cast<int64_t>(std::round(start_v * 1000.0));
+
+		corners[1].face = region_id.face;
+		corners[1].u_mm = static_cast<int64_t>(std::round((start_u + R) * 1000.0));
+		corners[1].v_mm = static_cast<int64_t>(std::round(start_v * 1000.0));
+
+		corners[2].face = region_id.face;
+		corners[2].u_mm = static_cast<int64_t>(std::round(start_u * 1000.0));
+		corners[2].v_mm = static_cast<int64_t>(std::round((start_v + R) * 1000.0));
+
+		corners[3].face = region_id.face;
+		corners[3].u_mm = static_cast<int64_t>(std::round((start_u + R) * 1000.0));
+		corners[3].v_mm = static_cast<int64_t>(std::round((start_v + R) * 1000.0));
+
+		for (int i = 0; i < 4; ++i) {
+			dirty_bounds.expand(canonicalize_surface_address(corners[i], p_scale));
+		}
+		
 		is_generated = true;
 		return true;
 	}
@@ -73,7 +108,6 @@ public:
 		return heights[p_z * GRID_DIM + p_x];
 	}
 
-	// TERRAIN-COLLISION-01: Export heightfield data buffer for Jolt heightfield shape creation
 	bool export_jolt_collision_buffer(ArenaAllocator &p_arena, Span<const float> &r_jolt_buffer) noexcept {
 		if (!is_generated) return false;
 
@@ -86,7 +120,6 @@ public:
 		return true;
 	}
 
-	// TERRAIN-RENDER-01: Export coarse mesh vertices for LivingWorldRendering LOD handoff
 	bool export_render_vertices(ArenaAllocator &p_arena, Span<const TerrainVertex> &r_vertex_buffer) noexcept {
 		if (!is_generated) return false;
 
@@ -94,17 +127,15 @@ public:
 		TerrainVertex *vertices = p_arena.allocate<TerrainVertex>(count);
 		if (!vertices) return false;
 
-		constexpr float spacing = 1024.0f / static_cast<float>(GRID_DIM - 1);
-
 		for (size_t z = 0; z < GRID_DIM; ++z) {
 			for (size_t x = 0; x < GRID_DIM; ++x) {
 				size_t idx = z * GRID_DIM + x;
-				vertices[idx].x = static_cast<float>(x) * spacing;
+				vertices[idx].x = static_cast<float>(x) * actual_spacing;
 				vertices[idx].y = heights[idx];
-				vertices[idx].z = static_cast<float>(z) * spacing;
-				vertices[idx].nx = 0.0f;
-				vertices[idx].ny = 1.0f;
-				vertices[idx].nz = 0.0f;
+				vertices[idx].z = static_cast<float>(z) * actual_spacing;
+				vertices[idx].nx = normals[idx].nx;
+				vertices[idx].ny = normals[idx].ny;
+				vertices[idx].nz = normals[idx].nz;
 			}
 		}
 
@@ -112,7 +143,7 @@ public:
 		return true;
 	}
 
-	[[nodiscard]] const DirtyBounds3D &get_dirty_bounds() const noexcept { return dirty_bounds; }
+	[[nodiscard]] const SurfaceBounds &get_dirty_bounds() const noexcept { return dirty_bounds; }
 	[[nodiscard]] bool has_valid_data() const noexcept { return is_generated; }
 };
 

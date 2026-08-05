@@ -21,7 +21,7 @@ struct SurfaceNormal {
 	float nz{ 0.0f };
 };
 
-class HeightfieldGenerator {
+class LegacyPlanarTerrainSignalV1 {
 private:
 	TerrainRecipe recipe{};
 
@@ -41,11 +41,11 @@ private:
 		float tx = smoothstep(static_cast<float>(p_x - floor_x));
 		float tz = smoothstep(static_cast<float>(p_z - floor_z));
 
-		uint32_t seed = recipe.seed ^ p_salt;
-		float n00 = squirrel_noise5_2d_zero_to_one(x0, z0, seed);
-		float n10 = squirrel_noise5_2d_zero_to_one(x1, z0, seed);
-		float n01 = squirrel_noise5_2d_zero_to_one(x0, z1, seed);
-		float n11 = squirrel_noise5_2d_zero_to_one(x1, z1, seed);
+		uint32_t seed = recipe.identity.world_seed ^ p_salt;
+		float n00 = squirrel_u01_24_v1(squirrel_noise5_i2_v1(x0, z0, seed));
+		float n10 = squirrel_u01_24_v1(squirrel_noise5_i2_v1(x1, z0, seed));
+		float n01 = squirrel_u01_24_v1(squirrel_noise5_i2_v1(x0, z1, seed));
+		float n11 = squirrel_u01_24_v1(squirrel_noise5_i2_v1(x1, z1, seed));
 
 		float nx0 = n00 + (n10 - n00) * tx;
 		float nx1 = n01 + (n11 - n01) * tx;
@@ -53,17 +53,17 @@ private:
 	}
 
 public:
-	HeightfieldGenerator() = default;
+	LegacyPlanarTerrainSignalV1() = default;
 
-	explicit HeightfieldGenerator(const TerrainRecipe &p_recipe) : recipe(p_recipe) {}
+	explicit LegacyPlanarTerrainSignalV1(const TerrainRecipe &p_recipe) : recipe(p_recipe) {}
 
 	[[nodiscard]] double evaluate_height(double p_world_x, double p_world_z) const noexcept {
 		double amplitude = 1.0;
-		double frequency = recipe.continental_frequency;
+		double frequency = recipe.legacy_signals.continental_frequency;
 		double total_elevation = 0.0;
 		double max_possible = 0.0;
 
-		for (uint8_t octave = 0; octave < recipe.octave_count; ++octave) {
+		for (uint8_t octave = 0; octave < recipe.legacy_signals.octave_count; ++octave) {
 			double sample_x = p_world_x * frequency;
 			double sample_z = p_world_z * frequency;
 
@@ -71,13 +71,13 @@ public:
 			total_elevation += static_cast<double>(n) * amplitude;
 			max_possible += amplitude;
 
-			amplitude *= static_cast<double>(recipe.persistence);
-			frequency *= static_cast<double>(recipe.lacunarity);
+			amplitude *= static_cast<double>(recipe.legacy_signals.persistence);
+			frequency *= static_cast<double>(recipe.legacy_signals.lacunarity);
 		}
 
 		double norm01 = total_elevation / max_possible;
-		double min_e = static_cast<double>(recipe.min_elevation_m);
-		double max_e = static_cast<double>(recipe.max_elevation_m);
+		double min_e = static_cast<double>(recipe.legacy_signals.min_elevation_m);
+		double max_e = static_cast<double>(recipe.legacy_signals.max_elevation_m);
 
 		if (norm01 < 0.5) {
 			double t = norm01 * 2.0; // t in [0, 1]
@@ -116,6 +116,10 @@ public:
 
 	[[nodiscard]] const TerrainRecipe &get_recipe() const noexcept { return recipe; }
 };
+
+using HeightfieldGenerator
+    [[deprecated("Use LegacyPlanarTerrainSignalV1 explicitly.")]]
+    = LegacyPlanarTerrainSignalV1;
 
 } // namespace Multinet
 

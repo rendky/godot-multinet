@@ -3,6 +3,7 @@
 
 #include "multinet/core/coordinates.h"
 #include "multinet/core/schema/binary_schema.h"
+#include "multinet/world/terrain/terrain_recipe_identity.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -21,8 +22,7 @@ struct TerrainCheckpointState {
 	static constexpr uint32_t EXPECTED_MAGIC = 0x4D4E5443; // 'MNTC'
 
 	uint32_t magic{ EXPECTED_MAGIC };
-	uint32_t recipe_version{ 1 };
-	uint32_t world_seed{ 1337 };
+	TerrainRecipeIdentity identity{};
 	WorldPosition64 player_position{};
 
 	uint32_t region_count{ 0 };
@@ -58,8 +58,7 @@ public:
 	template <size_t N>
 	static bool write_checkpoint(BinaryWriter &p_writer, const TerrainCheckpointState<N> &p_state) noexcept {
 		if (!p_writer.write_u32_le(TerrainCheckpointState<N>::EXPECTED_MAGIC)) return false;
-		if (!p_writer.write_u32_le(p_state.recipe_version)) return false;
-		if (!p_writer.write_u32_le(p_state.world_seed)) return false;
+		if (!TerrainRecipeIdentitySerializer::write_identity(p_writer, p_state.identity)) return false;
 
 		if (!write_f64_le(p_writer, p_state.player_position.x)) return false;
 		if (!write_f64_le(p_writer, p_state.player_position.y)) return false;
@@ -81,8 +80,7 @@ public:
 		if (!p_reader.read_u32_le(magic) || magic != TerrainCheckpointState<N>::EXPECTED_MAGIC) {
 			return false;
 		}
-		if (!p_reader.read_u32_le(r_state.recipe_version)) return false;
-		if (!p_reader.read_u32_le(r_state.world_seed)) return false;
+		if (!TerrainRecipeIdentitySerializer::read_identity(p_reader, r_state.identity)) return false;
 
 		if (!read_f64_le(p_reader, r_state.player_position.x)) return false;
 		if (!read_f64_le(p_reader, r_state.player_position.y)) return false;

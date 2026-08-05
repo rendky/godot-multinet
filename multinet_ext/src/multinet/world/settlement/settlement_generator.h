@@ -38,7 +38,7 @@ private:
 		float min_size = 20.0f;
 		
 		// SquirrelNoise for split decision
-		float r1 = squirrel_noise5_2d_zero_to_one(p_depth, 0, p_seed);
+		float r1 = squirrel_u01_24_v1(squirrel_noise5_i2_v1(p_depth, 0, p_seed));
 		bool split_horiz = (p_bounds.size.x > p_bounds.size.z);
 		// Force split if aspect ratio is extreme
 		if (p_bounds.size.x / p_bounds.size.z > 1.5) split_horiz = true;
@@ -63,7 +63,7 @@ private:
 		if (!split_horiz && !can_split_v) split_horiz = true;
 		
 		// Split ratio between 0.4 and 0.6
-		double split_ratio = 0.4 + (squirrel_noise5_2d_zero_to_one(p_depth, 1, p_seed) * 0.2);
+		double split_ratio = 0.4 + (squirrel_u01_24_v1(squirrel_noise5_i2_v1(p_depth, 1, p_seed)) * 0.2);
 		
 		AABB64 bounds1 = p_bounds;
 		AABB64 bounds2 = p_bounds;
@@ -78,8 +78,8 @@ private:
 			bounds2.position.z += bounds1.size.z;
 		}
 		
-		uint32_t seed1 = squirrel_noise5_2d(p_depth, 2, p_seed);
-		uint32_t seed2 = squirrel_noise5_2d(p_depth, 3, p_seed);
+		uint32_t seed1 = squirrel_noise5_i2_v1(p_depth, 2, p_seed);
+		uint32_t seed2 = squirrel_noise5_i2_v1(p_depth, 3, p_seed);
 		
 		subdivide_rect(bounds1, seed1, p_depth + 1, r_compounds, r_count, p_parent_key);
 		subdivide_rect(bounds2, seed2, p_depth + 1, r_compounds, r_count, p_parent_key);
@@ -132,7 +132,7 @@ public:
 			req.seed = bldg_seed;
 			
 			// Select program deterministically
-			float prog_roll = squirrel_noise5_zero_to_one(0, bldg_seed);
+			float prog_roll = squirrel_u01_24_v1(squirrel_noise5_i2_v1(0, 0, bldg_seed));
 			if (prog_roll < 0.6f) req.program_type = BuildingProgram::Dwelling;
 			else if (prog_roll < 0.85f) req.program_type = BuildingProgram::Shop;
 			else req.program_type = BuildingProgram::Warehouse;

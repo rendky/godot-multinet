@@ -6,12 +6,34 @@
 
 namespace Multinet {
 
-struct WorldPosition64 {
+struct FramePosition64 {
 	double x{ 0.0 };
 	double y{ 0.0 };
 	double z{ 0.0 };
 
-	[[nodiscard]] constexpr bool operator==(const WorldPosition64 &p_other) const noexcept {
+	[[nodiscard]] constexpr bool operator==(const FramePosition64 &p_other) const noexcept {
+		return x == p_other.x && y == p_other.y && z == p_other.z;
+	}
+};
+
+using WorldPosition64 [[deprecated("Use SurfaceAddress, SurfacePosition64, or FramePosition64 explicitly.")]] = FramePosition64;
+
+struct LocalPosition32 {
+	float x{ 0.0f };
+	float y{ 0.0f };
+	float z{ 0.0f };
+
+	[[nodiscard]] constexpr bool operator==(const LocalPosition32 &p_other) const noexcept {
+		return x == p_other.x && y == p_other.y && z == p_other.z;
+	}
+};
+
+struct Vec3d {
+	double x{ 0.0 };
+	double y{ 0.0 };
+	double z{ 0.0 };
+
+	[[nodiscard]] constexpr bool operator==(const Vec3d &p_other) const noexcept {
 		return x == p_other.x && y == p_other.y && z == p_other.z;
 	}
 };

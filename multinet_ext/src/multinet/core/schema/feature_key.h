@@ -28,9 +28,9 @@ struct FeatureKey {
 		const uint32_t n0 = static_cast<uint32_t>(path_hash);
 		const uint32_t n1 = static_cast<uint32_t>(path_hash >> 32);
 
-		const uint32_t h0 = squirrel_noise5(static_cast<int32_t>(p_feature_class), n0);
-		const uint32_t h1 = squirrel_noise5(static_cast<int32_t>(p_local_child_id), h0);
-		const uint32_t h2 = squirrel_noise5(static_cast<int32_t>(p_generator_version), h1 ^ n1);
+		const uint32_t h0 = squirrel_noise5_i2_v1(static_cast<int32_t>(p_feature_class), 0, n0);
+		const uint32_t h1 = squirrel_noise5_i2_v1(static_cast<int32_t>(p_local_child_id), 0, h0);
+		const uint32_t h2 = squirrel_noise5_i2_v1(static_cast<int32_t>(p_generator_version), 0, h1 ^ n1);
 
 		const uint64_t next_hash = (static_cast<uint64_t>(h2) << 32) | h1;
 		return FeatureKey{ root_id, next_hash };

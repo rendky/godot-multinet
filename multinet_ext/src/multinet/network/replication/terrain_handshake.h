@@ -2,6 +2,8 @@
 #define MULTINET_TERRAIN_HANDSHAKE_H
 
 #include <cstdint>
+#include "multinet/world/terrain/terrain_recipe.h" // For LegacyTerrainSignalBand
+#include "multinet/world/terrain/terrain_recipe_identity.h"
 
 namespace Multinet {
 
@@ -9,14 +11,11 @@ struct TerrainRecipeHandshakePacket {
 	static constexpr uint32_t EXPECTED_MAGIC = 0x4D4E5452; // 'MNTR'
 
 	uint32_t magic{ EXPECTED_MAGIC };
-	uint32_t recipe_version{ 1 };
-	uint32_t world_seed{ 1337 };
-	float min_elevation_m{ -100.0f };
-	float max_elevation_m{ 1000.0f };
-	float continental_frequency{ 0.001f };
+	TerrainRecipeIdentity identity{};
+	LegacyTerrainSignalBand legacy_signals{};
 
-	[[nodiscard]] constexpr bool is_valid() const noexcept {
-		return magic == EXPECTED_MAGIC && recipe_version > 0;
+	[[nodiscard]] constexpr bool is_valid(const TerrainRecipeIdentity& expected_identity) const noexcept {
+		return magic == EXPECTED_MAGIC && identity == expected_identity;
 	}
 };
 
