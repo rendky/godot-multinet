@@ -1,5 +1,6 @@
 #include "godot/terrain_adapter.h"
 #include "multinet/core/spatial/surface_topology.h"
+#include "multinet/core/spatial/surface_coordinate_conversion.h"
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/classes/engine.hpp>
@@ -8,8 +9,124 @@
 #include <godot_cpp/classes/world3d.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <iostream>
+#include <condition_variable>
+#include <chrono>
+#include <mutex>
+#include <cmath>
+#include <limits>
+#include <iomanip>
+#include <sstream>
+
+#ifdef DEBUG_ENABLED
+namespace {
+class DebugBlockingDiagnosticDeltaField final : public Multinet::TerrainCommittedDeltaField {
+	Multinet::CanonicalDiagnosticTerrainCommittedDeltaField inner_field;
+	mutable std::mutex mutex;
+	mutable std::condition_variable release_cv;
+	mutable bool released{ false };
+
+public:
+	DebugBlockingDiagnosticDeltaField(
+		Multinet::SurfacePosition64 center,
+		double radius_m,
+		float amplitude_m,
+		const Multinet::WorldScaleManifest& manifest,
+		uint32_t content_version
+	) : inner_field(center, radius_m, amplitude_m, manifest, content_version) {}
+
+	float sample_delta(Multinet::SurfacePosition64 position) const noexcept override {
+		std::unique_lock<std::mutex> lock(mutex);
+		release_cv.wait(lock, [this] { return released; });
+		lock.unlock();
+		return inner_field.sample_delta(position);
+	}
+
+	bool block_may_have_nonzero_delta(
+		const multinet::rendering::TerrainRenderBlockKey& key,
+		const Multinet::WorldScaleManifest& manifest,
+		const multinet::rendering::BlockClipmapProfile& profile,
+		double apron_m
+	) const noexcept override {
+		return inner_field.block_may_have_nonzero_delta(key, manifest, profile, apron_m);
+	}
+
+	uint32_t get_block_content_version(
+		const multinet::rendering::TerrainRenderBlockKey& key,
+		const Multinet::WorldScaleManifest& manifest,
+		const multinet::rendering::BlockClipmapProfile& profile,
+		double apron_m
+	) const noexcept override {
+		return inner_field.get_block_content_version(key, manifest, profile, apron_m);
+	}
+
+	Multinet::TerrainDeltaEnvelope get_conservative_envelope() const noexcept override {
+		return inner_field.get_conservative_envelope();
+	}
+
+	void release_generation() noexcept {
+		std::lock_guard<std::mutex> lock(mutex);
+		released = true;
+		release_cv.notify_all();
+	}
+};
+}
+#endif
 
 namespace godot {
+
+namespace {
+constexpr double MAX_WORLD_SIDE_KM = 4294967.295; // UINT32_MAX metres, in km.
+constexpr uint64_t MIN_RENDERABLE_CLOSED_SIDE_M = 79;
+
+bool try_km_to_world_metres(double kilometres, uint64_t& out_metres) noexcept {
+	const long double metres = static_cast<long double>(kilometres) * 1000.0L;
+	if (!std::isfinite(kilometres) || !std::isfinite(static_cast<double>(metres)) ||
+		metres <= 0.0L || metres > static_cast<long double>(MAX_WORLD_SIDE_KM) * 1000.0L) return false;
+	out_metres = static_cast<uint64_t>(std::llround(metres));
+	return out_metres > 0 && out_metres <= static_cast<uint64_t>(MAX_WORLD_SIDE_KM * 1000.0);
+}
+
+Multinet::WorldScaleManifest make_compatibility_scale(const Multinet::WorldDomainManifest& domain) {
+	if (!domain.is_finite()) return domain.closed_surface;
+	Multinet::WorldScaleManifest scale{};
+	scale.input.area_equivalent_side_m = std::max(domain.finite.extent_x_m, domain.finite.extent_z_m);
+	scale.total_surface_area_m2 = domain.canonical_area_m2;
+	scale.chart_half_extent_mm = std::max(domain.finite.half_extent_x_mm, domain.finite.half_extent_z_mm);
+	scale.regions_per_face_axis = std::max(domain.finite.regions_x, domain.finite.regions_z);
+	scale.actual_region_extent_m = std::max(domain.finite.actual_region_extent_x_m, domain.finite.actual_region_extent_z_m);
+	scale.topology_version = domain.topology_version;
+	scale.projection_version = domain.projection_version;
+	scale.logical_area_radius_m = std::sqrt(static_cast<double>(domain.canonical_area_m2) / (4.0 * 3.14159265358979323846));
+	scale.manifest_hash = domain.domain_manifest_hash;
+	return scale;
+}
+
+Multinet::SurfaceFrame make_editor_frame_for_face(
+	Multinet::WorldDomainTopology topology,
+	Multinet::SurfaceFace face,
+	const Multinet::SurfacePosition64& origin,
+	uint64_t epoch,
+	uint32_t topology_version,
+	uint32_t projection_version
+) {
+	Multinet::SurfaceFrame frame;
+	frame.origin = origin;
+	frame.frame_epoch = epoch;
+	frame.topology_version = topology_version;
+	frame.projection_version = projection_version;
+	if (topology == Multinet::WorldDomainTopology::FiniteRectangle) {
+		frame.tangent_basis.u_axis = { 1.0, 0.0, 0.0 };
+		frame.tangent_basis.v_axis = { 0.0, 0.0, 1.0 };
+		frame.tangent_basis.up_axis = { 0.0, 1.0, 0.0 };
+		return frame;
+	}
+	Multinet::SurfaceFrame flat_basis;
+	if (Multinet::try_make_flat_surface_frame_for_face(face, flat_basis)) {
+		frame.tangent_basis = flat_basis.tangent_basis;
+	}
+	return frame;
+}
+}
 
 MultinetBCCMNode3D::MultinetBCCMNode3D() {
 }
@@ -38,6 +155,36 @@ void MultinetBCCMNode3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_persistence"), &MultinetBCCMNode3D::get_persistence);
 	ClassDB::bind_method(D_METHOD("set_lacunarity", "lacunarity"), &MultinetBCCMNode3D::set_lacunarity);
 	ClassDB::bind_method(D_METHOD("get_lacunarity"), &MultinetBCCMNode3D::get_lacunarity);
+	ClassDB::bind_method(D_METHOD("set_coordinate_wrapping", "enabled"), &MultinetBCCMNode3D::set_coordinate_wrapping);
+	ClassDB::bind_method(D_METHOD("get_coordinate_wrapping"), &MultinetBCCMNode3D::get_coordinate_wrapping);
+	ClassDB::bind_method(D_METHOD("set_square_world", "enabled"), &MultinetBCCMNode3D::set_square_world);
+	ClassDB::bind_method(D_METHOD("get_square_world"), &MultinetBCCMNode3D::get_square_world);
+	ClassDB::bind_method(D_METHOD("set_world_side_km", "kilometres"), &MultinetBCCMNode3D::set_world_side_km);
+	ClassDB::bind_method(D_METHOD("get_world_side_km"), &MultinetBCCMNode3D::get_world_side_km);
+	ClassDB::bind_method(D_METHOD("set_world_extent_x_km", "kilometres"), &MultinetBCCMNode3D::set_world_extent_x_km);
+	ClassDB::bind_method(D_METHOD("get_world_extent_x_km"), &MultinetBCCMNode3D::get_world_extent_x_km);
+	ClassDB::bind_method(D_METHOD("set_world_extent_z_km", "kilometres"), &MultinetBCCMNode3D::set_world_extent_z_km);
+	ClassDB::bind_method(D_METHOD("get_world_extent_z_km"), &MultinetBCCMNode3D::get_world_extent_z_km);
+	ClassDB::bind_method(D_METHOD("set_closed_equivalent_side_km", "kilometres"), &MultinetBCCMNode3D::set_closed_equivalent_side_km);
+	ClassDB::bind_method(D_METHOD("get_closed_equivalent_side_km"), &MultinetBCCMNode3D::get_closed_equivalent_side_km);
+	ClassDB::bind_method(D_METHOD("set_chp_enabled", "enabled"), &MultinetBCCMNode3D::set_chp_enabled);
+	ClassDB::bind_method(D_METHOD("get_chp_enabled"), &MultinetBCCMNode3D::get_chp_enabled);
+	ClassDB::bind_method(D_METHOD("set_chp_radius_policy", "policy"), &MultinetBCCMNode3D::set_chp_radius_policy);
+	ClassDB::bind_method(D_METHOD("get_chp_radius_policy"), &MultinetBCCMNode3D::get_chp_radius_policy);
+	ClassDB::bind_method(D_METHOD("set_chp_explicit_radius_km", "kilometres"), &MultinetBCCMNode3D::set_chp_explicit_radius_km);
+	ClassDB::bind_method(D_METHOD("get_chp_explicit_radius_km"), &MultinetBCCMNode3D::get_chp_explicit_radius_km);
+	ClassDB::bind_method(D_METHOD("get_canonical_area_km2"), &MultinetBCCMNode3D::get_canonical_area_km2);
+	ClassDB::bind_method(D_METHOD("get_logical_radius_km"), &MultinetBCCMNode3D::get_logical_radius_km);
+	ClassDB::bind_method(D_METHOD("get_closed_face_extent_km"), &MultinetBCCMNode3D::get_closed_face_extent_km);
+	ClassDB::bind_method(D_METHOD("get_closed_face_half_extent_km"), &MultinetBCCMNode3D::get_closed_face_half_extent_km);
+	ClassDB::bind_method(D_METHOD("get_regions_per_face_axis"), &MultinetBCCMNode3D::get_regions_per_face_axis);
+	ClassDB::bind_method(D_METHOD("get_actual_region_extent_m"), &MultinetBCCMNode3D::get_actual_region_extent_m);
+	ClassDB::bind_method(D_METHOD("get_active_domain_hash"), &MultinetBCCMNode3D::get_active_domain_hash);
+	ClassDB::bind_method(D_METHOD("get_active_presentation_hash"), &MultinetBCCMNode3D::get_active_presentation_hash);
+	ClassDB::bind_method(D_METHOD("get_active_domain_hash_text"), &MultinetBCCMNode3D::get_active_domain_hash_text);
+	ClassDB::bind_method(D_METHOD("get_active_presentation_hash_text"), &MultinetBCCMNode3D::get_active_presentation_hash_text);
+	ClassDB::bind_method(D_METHOD("get_domain_validation_message"), &MultinetBCCMNode3D::get_domain_validation_message);
+	ClassDB::bind_method(D_METHOD("get_chp_status"), &MultinetBCCMNode3D::get_chp_status);
 
 
 	ClassDB::bind_method(D_METHOD("set_freeze_update", "freeze"), &MultinetBCCMNode3D::set_freeze_update);
@@ -53,10 +200,18 @@ void MultinetBCCMNode3D::_bind_methods() {
 		D_METHOD("set_canonical_camera_state_from_values", "face", "u_m", "v_m", "altitude_m", "frame_epoch"),
 		&MultinetBCCMNode3D::set_canonical_camera_state_from_values
 	);
+	ClassDB::bind_method(
+		D_METHOD("advance_canonical_observer", "presentation_dx", "altitude_dy", "presentation_dz", "delta_seconds"),
+		&MultinetBCCMNode3D::advance_canonical_observer
+	);
 
 #ifdef DEBUG_ENABLED
 	ClassDB::bind_method(D_METHOD("debug_publish_synthetic_edge_camera", "camera", "signed_distance_to_edge_m", "epoch"), &MultinetBCCMNode3D::debug_publish_synthetic_edge_camera);
 	ClassDB::bind_method(D_METHOD("publish_editor_view_camera", "editor_camera"), &MultinetBCCMNode3D::publish_editor_view_camera);
+	ClassDB::bind_method(D_METHOD("debug_publish_diagnostic_delta", "face", "u_m", "v_m", "radius_m", "amplitude_m", "content_version", "hold_generation"), &MultinetBCCMNode3D::debug_publish_diagnostic_delta);
+	ClassDB::bind_method(D_METHOD("debug_publish_null_delta"), &MultinetBCCMNode3D::debug_publish_null_delta);
+	ClassDB::bind_method(D_METHOD("debug_release_held_delta_generation"), &MultinetBCCMNode3D::debug_release_held_delta_generation);
+	ClassDB::bind_method(D_METHOD("debug_get_block_state", "face", "block_u", "block_v", "lod"), &MultinetBCCMNode3D::debug_get_block_state);
 #endif
 	ClassDB::bind_method(D_METHOD("get_debug_summary"), &MultinetBCCMNode3D::get_debug_summary);
 
@@ -73,10 +228,64 @@ void MultinetBCCMNode3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "octave_count", PROPERTY_HINT_RANGE, "1, 12, 1"), "set_octave_count", "get_octave_count");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "persistence", PROPERTY_HINT_RANGE, "0.0, 1.0, 0.01"), "set_persistence", "get_persistence");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lacunarity", PROPERTY_HINT_RANGE, "1.0, 4.0, 0.01"), "set_lacunarity", "get_lacunarity");
-	ADD_GROUP("", "");
+	ADD_GROUP("World Domain", "");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "coordinate_wrapping"), "set_coordinate_wrapping", "get_coordinate_wrapping");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "square_world"), "set_square_world", "get_square_world");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "world_side_km", PROPERTY_HINT_RANGE, "0.001, 4294967.295, 0.001"), "set_world_side_km", "get_world_side_km");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "world_extent_x_km", PROPERTY_HINT_RANGE, "0.001, 4294967.295, 0.001"), "set_world_extent_x_km", "get_world_extent_x_km");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "world_extent_z_km", PROPERTY_HINT_RANGE, "0.001, 4294967.295, 0.001"), "set_world_extent_z_km", "get_world_extent_z_km");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "closed_equivalent_side_km", PROPERTY_HINT_RANGE, "0.079, 4294967.295, 0.001"), "set_closed_equivalent_side_km", "get_closed_equivalent_side_km");
+	ADD_GROUP("World Presentation", "");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "chp_enabled"), "set_chp_enabled", "get_chp_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "chp_radius_policy", PROPERTY_HINT_ENUM, "CanonicalClosedSurface:0,AreaEquivalent:1,Explicit:2"), "set_chp_radius_policy", "get_chp_radius_policy");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "chp_explicit_radius_km", PROPERTY_HINT_RANGE, "0.001, 4294967.295, 0.001"), "set_chp_explicit_radius_km", "get_chp_explicit_radius_km");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "chp_status", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY), "", "get_chp_status");
+	ADD_GROUP("World Domain (Derived)", "");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "canonical_area_km2", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY), "", "get_canonical_area_km2");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "logical_radius_km", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY), "", "get_logical_radius_km");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "closed_face_extent_km", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY), "", "get_closed_face_extent_km");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "closed_face_half_extent_km", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY), "", "get_closed_face_half_extent_km");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "regions_per_face_axis", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY), "", "get_regions_per_face_axis");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "actual_region_extent_m", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY), "", "get_actual_region_extent_m");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "active_domain_hash", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY), "", "get_active_domain_hash_text");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "active_presentation_hash", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY), "", "get_active_presentation_hash_text");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "domain_validation_message", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY), "", "get_domain_validation_message");
+	ClassDB::bind_method(D_METHOD("set_source_mode", "mode"), &MultinetBCCMNode3D::set_source_mode);
+	ClassDB::bind_method(D_METHOD("get_source_mode"), &MultinetBCCMNode3D::get_source_mode);
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "source_mode", PROPERTY_HINT_ENUM, "AnalyticBase:0,AbsoluteHeightPageDebug:1,HybridAdditiveDelta:2"), "set_source_mode", "get_source_mode");
+
+	ClassDB::bind_method(D_METHOD("set_analytic_debug_prewarm_pages", "prewarm"), &MultinetBCCMNode3D::set_analytic_debug_prewarm_pages);
+	ClassDB::bind_method(D_METHOD("get_analytic_debug_prewarm_pages"), &MultinetBCCMNode3D::get_analytic_debug_prewarm_pages);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "analytic_debug_prewarm_pages"), "set_analytic_debug_prewarm_pages", "get_analytic_debug_prewarm_pages");
+
 	ClassDB::bind_method(D_METHOD("set_camera_target", "path"), &MultinetBCCMNode3D::set_camera_target);
 	ClassDB::bind_method(D_METHOD("get_camera_target"), &MultinetBCCMNode3D::get_camera_target);
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "camera_target"), "set_camera_target", "get_camera_target");
+}
+
+void MultinetBCCMNode3D::_validate_property(PropertyInfo& p_property) const {
+	const StringName name = p_property.name;
+	const bool wrapping = get_coordinate_wrapping();
+	const bool finite_square = !wrapping && square_world;
+	const bool finite_rectangle = !wrapping && !square_world;
+	const bool chp_visible = world_presentation_input.chp_enabled && !wrapping;
+
+	auto hide = [&p_property]() {
+		// Keep inactive values serialized so switching modes does not lose the
+		// user's previous configuration, but remove them from the Inspector.
+		p_property.usage = PROPERTY_USAGE_STORAGE;
+	};
+
+	if (name == StringName("square_world") && wrapping) hide();
+	if (name == StringName("world_side_km") && !finite_square) hide();
+	if ((name == StringName("world_extent_x_km") || name == StringName("world_extent_z_km")) && !finite_rectangle) hide();
+	if (name == StringName("closed_equivalent_side_km") && !wrapping) hide();
+
+	if (name == StringName("logical_radius_km") && !wrapping) hide();
+	if ((name == StringName("closed_face_extent_km") || name == StringName("closed_face_half_extent_km") ||
+			 name == StringName("regions_per_face_axis") || name == StringName("actual_region_extent_m")) && !wrapping) hide();
+
+	if ((name == StringName("chp_radius_policy") || name == StringName("chp_explicit_radius_km")) && !chp_visible) hide();
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +300,8 @@ void MultinetBCCMNode3D::request_recipe_rebuild() {
 void MultinetBCCMNode3D::apply_recipe_rebuild() {
 	if (!recipe_rebuild_pending) return;
 	recipe_rebuild_pending = false;
+	domain_rebuild_pending = false;
+	presentation_rebuild_pending = false;
 
 	// 1. Clean up renderer resources.
 	bccm_renderer.cleanup();
@@ -104,13 +315,16 @@ void MultinetBCCMNode3D::apply_recipe_rebuild() {
 	// 3. Executor is preserved — not destroyed.
 
 	// 4. Finalize recipe against manifest (rebuilds hash).
-	Multinet::WorldScaleInput input{};
-	manifest = Multinet::build_world_scale_manifest(input);
+	world_domain_manifest = Multinet::build_world_domain_manifest(world_domain_input);
+	world_presentation_manifest = Multinet::build_world_presentation_manifest(world_domain_manifest, world_presentation_input);
+	manifest = make_compatibility_scale(world_domain_manifest);
 	if (!manifest.is_valid()) {
+		domain_validation_message = "World domain manifest is invalid; check the configured dimensions and integer range.";
 		std::cerr << "[MultinetBCCMNode3D] apply_recipe_rebuild: invalid manifest." << std::endl;
 		return;
 	}
-	if (!Multinet::finalize_terrain_recipe(recipe, manifest)) {
+	if (!Multinet::finalize_terrain_recipe(recipe, world_domain_manifest)) {
+		domain_validation_message = "Terrain recipe could not be finalized for the active world domain.";
 		std::cerr << "[MultinetBCCMNode3D] apply_recipe_rebuild: finalize_terrain_recipe failed." << std::endl;
 		return;
 	}
@@ -122,7 +336,7 @@ void MultinetBCCMNode3D::apply_recipe_rebuild() {
 
 	// 6. Construct new ConcreteTerrainRenderSource.
 	render_source = std::make_unique<Multinet::ConcreteTerrainRenderSource>(
-		recipe, manifest, *executor
+		recipe, world_domain_manifest, *executor
 	);
 
 	// 7. Rebuild BCCMSourceExpectation.
@@ -130,13 +344,17 @@ void MultinetBCCMNode3D::apply_recipe_rebuild() {
 
 	manifest_built = true;
 	source_dirty = false;
+	domain_rebuild_pending = false;
+	domain_validation_message = "OK";
 
 	// 8. Reinitialize renderer.
 	if (get_world_3d().is_valid()) {
 		auto* rs = godot::RenderingServer::get_singleton();
 		Multinet::TerrainFallbackBounds fb = render_source->get_snapshot().fallback_bounds;
-		if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), manifest, recipe.identity, fb)) {
+		if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
 			std::cerr << "[MultinetBCCMNode3D] apply_recipe_rebuild: renderer initialization failed." << std::endl;
+		} else {
+			bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
 		}
 	}
 }
@@ -145,27 +363,44 @@ void MultinetBCCMNode3D::apply_recipe_rebuild() {
 // Internal pipeline
 // ---------------------------------------------------------------------------
 
+void MultinetBCCMNode3D::refresh_source_expectation_from_source() {
+	if (render_source) {
+		Multinet::TerrainRenderSourceSnapshot snap = render_source->get_snapshot();
+		source_expectation.recipe_identity = snap.recipe_identity;
+		source_expectation.world_manifest_hash = snap.world_manifest_hash;
+		source_expectation.topology_version = snap.topology_version;
+		source_expectation.projection_version = snap.projection_version;
+		source_expectation.terrain_version = snap.terrain_version;
+		source_expectation.source_version = snap.source_version;
+	} else {
+		source_expectation.recipe_identity = recipe.identity;
+		source_expectation.world_manifest_hash = manifest.manifest_hash;
+		source_expectation.topology_version = manifest.topology_version;
+		source_expectation.projection_version = manifest.projection_version;
+		source_expectation.terrain_version = 1;
+		source_expectation.source_version = 1;
+	}
+}
+
 void MultinetBCCMNode3D::build_source_expectation() {
-	source_expectation.recipe_identity = recipe.identity;
-	source_expectation.world_manifest_hash = manifest.manifest_hash;
-	source_expectation.topology_version = manifest.topology_version;
-	source_expectation.projection_version = manifest.projection_version;
-	source_expectation.terrain_version = 1;
-	source_expectation.source_version = 1;
+	refresh_source_expectation_from_source();
 }
 
 void MultinetBCCMNode3D::rebuild_source() {
 	if (!source_dirty) return;
 
 	// 1. Build manifest first — abort if invalid.
-	Multinet::WorldScaleInput input{};
-	manifest = Multinet::build_world_scale_manifest(input);
+	world_domain_manifest = Multinet::build_world_domain_manifest(world_domain_input);
+	world_presentation_manifest = Multinet::build_world_presentation_manifest(world_domain_manifest, world_presentation_input);
+	manifest = make_compatibility_scale(world_domain_manifest);
 	if (!manifest.is_valid()) {
+		domain_validation_message = "World domain manifest is invalid; check the configured dimensions and integer range.";
 		return;
 	}
 
 	// 2. Finalize recipe against the manifest — abort if it fails.
-	if (!Multinet::finalize_terrain_recipe(recipe, manifest)) {
+	if (!Multinet::finalize_terrain_recipe(recipe, world_domain_manifest)) {
+		domain_validation_message = "Terrain recipe could not be finalized for the active world domain.";
 		return;
 	}
 
@@ -182,13 +417,14 @@ void MultinetBCCMNode3D::rebuild_source() {
 
 	// 5. Construct source with executor reference.
 	render_source = std::make_unique<Multinet::ConcreteTerrainRenderSource>(
-		recipe, manifest, *executor
+		recipe, world_domain_manifest, *executor
 	);
 
 	build_source_expectation();
 
 	manifest_built = true;
 	source_dirty = false;
+	domain_validation_message = "OK";
 }
 
 void MultinetBCCMNode3D::set_canonical_camera_state(
@@ -219,19 +455,171 @@ void MultinetBCCMNode3D::set_canonical_camera_state_from_values(
 	pos.topology_version = manifest.topology_version;
 	pos.projection_version = manifest.projection_version;
 
-	Multinet::SurfaceFrame frame;
-	frame.origin = pos;
-	frame.origin.u_m = 0.0;
-	frame.origin.v_m = 0.0;
-	frame.origin.altitude_m = 0.0;
-	frame.tangent_basis.u_axis  = { 1.0, 0.0, 0.0 };
-	frame.tangent_basis.v_axis  = { 0.0, 0.0, 1.0 };
-	frame.tangent_basis.up_axis = { 0.0, 1.0, 0.0 };
-	frame.frame_epoch = p_frame_epoch;
-	frame.topology_version = manifest.topology_version;
-	frame.projection_version = manifest.projection_version;
+	Multinet::SurfaceFrame frame = make_editor_frame_for_face(
+			world_domain_manifest.input.topology,
+			pos.face,
+			pos,
+			p_frame_epoch,
+			manifest.topology_version,
+			manifest.projection_version
+		);
 
 	set_canonical_camera_state(pos, frame, p_frame_epoch);
+	current_cam_state.presentation_x_m = 0.0;
+	current_cam_state.presentation_z_m = 0.0;
+	current_cam_state.unfolding_generation = current_cam_state.unfolding_generation == (std::numeric_limits<uint64_t>::max)()
+		? 1
+		: current_cam_state.unfolding_generation + 1;
+	current_cam_state.has_presentation_position = true;
+	current_cam_state.unfolding_root_frame = frame;
+	current_cam_state.unfolding_root_frame.origin.altitude_m = 0.0;
+	current_cam_state.unfolding_root_presentation_x_m = 0.0;
+	current_cam_state.unfolding_root_presentation_z_m = 0.0;
+	current_cam_state.has_unfolding_root = true;
+}
+
+godot::Dictionary MultinetBCCMNode3D::advance_canonical_observer(
+	double p_presentation_dx,
+	double p_altitude_dy,
+	double p_presentation_dz,
+	double p_delta_seconds
+) {
+	godot::Dictionary result;
+	result["valid"] = false;
+	if (!manifest_built || !world_domain_manifest.is_valid() ||
+		!std::isfinite(p_presentation_dx) || !std::isfinite(p_altitude_dy) || !std::isfinite(p_presentation_dz) ||
+		!std::isfinite(p_delta_seconds) || p_delta_seconds < 0.0) {
+		return result;
+	}
+	if (!current_cam_state.has_presentation_position) {
+		current_cam_state.presentation_x_m = 0.0;
+		current_cam_state.presentation_z_m = 0.0;
+		current_cam_state.unfolding_generation = std::max<uint64_t>(1, current_cam_state.unfolding_generation);
+		current_cam_state.has_presentation_position = true;
+	}
+
+	if (current_cam_state.frame_epoch == 0 || !current_cam_state.canonical_position.is_valid()) {
+		current_cam_state.canonical_position.face = Multinet::SurfaceFace::PositiveX;
+		current_cam_state.canonical_position.u_m = 0.0;
+		current_cam_state.canonical_position.v_m = 0.0;
+		current_cam_state.canonical_position.altitude_m = 3000.0;
+		current_cam_state.canonical_position.topology_version = world_domain_manifest.topology_version;
+		current_cam_state.canonical_position.projection_version = world_domain_manifest.projection_version;
+		current_cam_state.frame_epoch = 1;
+		current_cam_state.active_frame = make_editor_frame_for_face(
+			world_domain_input.topology,
+			current_cam_state.canonical_position.face,
+			current_cam_state.canonical_position,
+			current_cam_state.frame_epoch,
+			world_domain_manifest.topology_version,
+			world_domain_manifest.projection_version
+		);
+	}
+	if (!current_cam_state.has_unfolding_root) {
+		current_cam_state.unfolding_root_frame = current_cam_state.active_frame;
+		current_cam_state.unfolding_root_frame.origin.altitude_m = 0.0;
+		current_cam_state.unfolding_root_presentation_x_m = current_cam_state.presentation_x_m;
+		current_cam_state.unfolding_root_presentation_z_m = current_cam_state.presentation_z_m;
+		current_cam_state.has_unfolding_root = true;
+	}
+
+	Multinet::SurfaceFrame next_frame;
+	Multinet::SurfacePosition64 next_position;
+	uint32_t transition_count = 0;
+	Multinet::SurfaceFace last_source = current_cam_state.canonical_position.face;
+	Multinet::SurfaceFace last_destination = last_source;
+	Multinet::SurfaceEdge last_edge = Multinet::SurfaceEdge::NegativeU;
+	// The controller speaks in the stable flat presentation plane. Transport
+	// that intent into the current canonical chart before advancing authority.
+	const double canonical_local_u =
+		current_cam_state.active_frame.tangent_basis.u_axis.x * p_presentation_dx +
+		current_cam_state.active_frame.tangent_basis.u_axis.z * p_presentation_dz;
+	const double canonical_local_v =
+		current_cam_state.active_frame.tangent_basis.v_axis.x * p_presentation_dx +
+		current_cam_state.active_frame.tangent_basis.v_axis.z * p_presentation_dz;
+	const Multinet::FramePosition64 local_delta{ canonical_local_u, p_altitude_dy, canonical_local_v };
+	const double presentation_dx = p_presentation_dx;
+	const double presentation_dz = p_presentation_dz;
+	if (!Multinet::try_advance_domain_surface_frame(
+		local_delta,
+		world_domain_manifest,
+		current_cam_state.active_frame,
+		next_frame,
+		next_position,
+		transition_count,
+		&last_source,
+		&last_destination,
+		&last_edge
+	)) {
+		runtime_outside_finite_boundary = world_domain_manifest.is_finite();
+		result["outside_finite_boundary"] = runtime_outside_finite_boundary;
+		return result;
+	}
+
+	current_cam_state.canonical_position = next_position;
+	current_cam_state.active_frame = next_frame;
+	current_cam_state.frame_epoch = next_frame.frame_epoch;
+	current_cam_state.is_visible = is_visible_in_tree();
+	current_cam_state.presentation_x_m += presentation_dx;
+	current_cam_state.presentation_z_m += presentation_dz;
+	if (!world_domain_manifest.is_finite()) {
+		const double chart_dx_m = current_cam_state.presentation_x_m -
+			current_cam_state.unfolding_root_presentation_x_m;
+		const double chart_dz_m = current_cam_state.presentation_z_m -
+			current_cam_state.unfolding_root_presentation_z_m;
+		const double rebase_radius_m =
+			Multinet::closed_flat_chart_max_radius_m(world_domain_manifest) * 0.25;
+		if (rebase_radius_m > 0.0 &&
+			chart_dx_m * chart_dx_m + chart_dz_m * chart_dz_m > rebase_radius_m * rebase_radius_m) {
+			// Keep the flat BCCM inside a locally metric sphere chart. This is an
+			// atlas rebase, not a canonical teleport.
+			current_cam_state.unfolding_root_frame = next_frame;
+			current_cam_state.unfolding_root_frame.origin.altitude_m = 0.0;
+			current_cam_state.unfolding_root_presentation_x_m = current_cam_state.presentation_x_m;
+			current_cam_state.unfolding_root_presentation_z_m = current_cam_state.presentation_z_m;
+			current_cam_state.unfolding_generation =
+				current_cam_state.unfolding_generation == (std::numeric_limits<uint64_t>::max)()
+				? 1 : current_cam_state.unfolding_generation + 1;
+		}
+	}
+	runtime_outside_finite_boundary = false;
+	runtime_last_transition_count = transition_count;
+	runtime_last_transition_source_face = static_cast<int>(last_source);
+	runtime_last_transition_destination_face = static_cast<int>(last_destination);
+	runtime_last_transition_edge = transition_count > 0 ? static_cast<int>(last_edge) : -1;
+	if (p_delta_seconds > 0.0) {
+		runtime_ground_speed_m_s = std::sqrt(presentation_dx * presentation_dx + presentation_dz * presentation_dz) / p_delta_seconds;
+		runtime_vertical_speed_m_s = p_altitude_dy / p_delta_seconds;
+		runtime_total_speed_m_s = std::sqrt(
+			presentation_dx * presentation_dx + presentation_dz * presentation_dz + p_altitude_dy * p_altitude_dy) / p_delta_seconds;
+	} else {
+		runtime_ground_speed_m_s = 0.0;
+		runtime_vertical_speed_m_s = 0.0;
+		runtime_total_speed_m_s = 0.0;
+	}
+
+	result["valid"] = true;
+	result["face"] = static_cast<int>(next_position.face);
+	result["u_m"] = next_position.u_m;
+	result["v_m"] = next_position.v_m;
+	result["altitude_m"] = next_position.altitude_m;
+	result["frame_epoch"] = static_cast<int64_t>(next_frame.frame_epoch);
+	result["transition_count"] = transition_count;
+	result["presentation_x_m"] = current_cam_state.presentation_x_m;
+	result["presentation_z_m"] = current_cam_state.presentation_z_m;
+	result["ground_speed_m_s"] = runtime_ground_speed_m_s;
+	result["vertical_speed_m_s"] = runtime_vertical_speed_m_s;
+	result["total_speed_m_s"] = runtime_total_speed_m_s;
+	result["last_transition_source_face"] = static_cast<int>(last_source);
+	result["last_transition_destination_face"] = static_cast<int>(last_destination);
+	result["last_transition_edge"] = static_cast<int>(last_edge);
+	// Horizontal position is rebased around the observer; altitude is real.
+	// The flat basis must not rotate when canonical authority changes faces.
+	result["presentation_position"] = godot::Vector3(0.0f, static_cast<float>(next_position.altitude_m), 0.0f);
+	result["presentation_u_axis"] = godot::Vector3(1.0f, 0.0f, 0.0f);
+	result["presentation_up_axis"] = godot::Vector3(0.0f, 1.0f, 0.0f);
+	result["presentation_v_axis"] = godot::Vector3(0.0f, 0.0f, 1.0f);
+	return result;
 }
 
 #ifdef DEBUG_ENABLED
@@ -286,6 +674,138 @@ void MultinetBCCMNode3D::debug_publish_synthetic_edge_camera(godot::Camera3D* p_
 	xform.origin = godot::Vector3(pos.u_m, pos.altitude_m, pos.v_m);
 	p_camera->set_global_transform(xform);
 }
+
+godot::Dictionary MultinetBCCMNode3D::debug_publish_diagnostic_delta(
+	int p_face,
+	double p_u_m,
+	double p_v_m,
+	double p_radius_m,
+	float p_amplitude_m,
+	uint32_t p_content_version,
+	bool p_hold_generation
+) {
+	godot::Dictionary result;
+	if (!manifest_built || !render_source || p_radius_m <= 0.0 || p_content_version == 0) return result;
+	if (p_hold_generation) debug_release_held_delta_generation();
+
+	const int face_index = std::clamp(p_face, 0, 5);
+	Multinet::SurfacePosition64 center;
+	center.face = static_cast<Multinet::SurfaceFace>(face_index);
+	center.u_m = p_u_m;
+	center.v_m = p_v_m;
+	center.altitude_m = 0.0;
+	center.topology_version = manifest.topology_version;
+	center.projection_version = manifest.projection_version;
+
+	std::shared_ptr<Multinet::TerrainCommittedDeltaField> field;
+	if (p_hold_generation) {
+		field = std::make_shared<DebugBlockingDiagnosticDeltaField>(center, p_radius_m, p_amplitude_m, manifest, p_content_version);
+		debug_held_delta_field = field;
+	} else {
+		field = std::make_shared<Multinet::CanonicalDiagnosticTerrainCommittedDeltaField>(center, p_radius_m, p_amplitude_m, manifest, p_content_version);
+		debug_held_delta_field.reset();
+	}
+
+	Multinet::TerrainCommittedDeltaSnapshot snapshot;
+	snapshot.contract_version = Multinet::TERRAIN_PAGE_CONTRACT_VERSION_1;
+	snapshot.publication_version = ++debug_publication_version;
+	snapshot.minimum_delta_m = std::min(0.0f, p_amplitude_m);
+	snapshot.maximum_delta_m = std::max(0.0f, p_amplitude_m);
+	snapshot.maximum_abs_gradient = p_radius_m > 0.0
+		? static_cast<float>(0.5 * std::abs(p_amplitude_m) * 3.14159265358979323846 / p_radius_m)
+		: 0.0f;
+	snapshot.field = field;
+	render_source->set_payload_kind(Multinet::TerrainPagePayloadKind::AdditiveHeightDeltaV1);
+	render_source->set_committed_delta_snapshot(snapshot);
+	refresh_source_expectation_from_source();
+	bccm_renderer.set_source_mode(multinet::rendering::TerrainSourceMode::HybridAdditiveDelta);
+
+	multinet::rendering::BlockClipmapProfile profile;
+	int32_t block_u = static_cast<int32_t>(std::floor(p_u_m / profile.lod0_block_size));
+	int32_t block_v = static_cast<int32_t>(std::floor(p_v_m / profile.lod0_block_size));
+	const auto key = multinet::rendering::make_canonical_block_key(center.face, block_u, block_v, 0, manifest);
+	result["face"] = face_index;
+	result["block_u"] = key.block_u;
+	result["block_v"] = key.block_v;
+	result["lod"] = 0;
+	result["publication_version"] = snapshot.publication_version;
+	result["content_version"] = p_content_version;
+	result["hold_generation"] = p_hold_generation;
+	result["amplitude_m"] = p_amplitude_m;
+	return result;
+}
+
+void MultinetBCCMNode3D::debug_publish_null_delta() {
+	if (!manifest_built || !render_source) return;
+	debug_release_held_delta_generation();
+	Multinet::TerrainCommittedDeltaSnapshot snapshot;
+	snapshot.contract_version = Multinet::TERRAIN_PAGE_CONTRACT_VERSION_1;
+	snapshot.publication_version = ++debug_publication_version;
+	snapshot.minimum_delta_m = 0.0f;
+	snapshot.maximum_delta_m = 0.0f;
+	snapshot.maximum_abs_gradient = 0.0f;
+	snapshot.field = std::make_shared<Multinet::NullTerrainCommittedDeltaField>();
+	render_source->set_payload_kind(Multinet::TerrainPagePayloadKind::AdditiveHeightDeltaV1);
+	render_source->set_committed_delta_snapshot(snapshot);
+	refresh_source_expectation_from_source();
+}
+
+void MultinetBCCMNode3D::debug_release_held_delta_generation() {
+	if (!debug_held_delta_field) return;
+	if (auto held = std::dynamic_pointer_cast<DebugBlockingDiagnosticDeltaField>(debug_held_delta_field)) {
+		held->release_generation();
+	}
+	debug_held_delta_field.reset();
+}
+
+godot::Dictionary MultinetBCCMNode3D::debug_get_block_state(int p_face, int p_block_u, int p_block_v, int p_lod) const {
+	godot::Dictionary result;
+	const int face_index = std::clamp(p_face, 0, 5);
+	multinet::rendering::TerrainRenderBlockKey key{
+		static_cast<Multinet::SurfaceFace>(face_index),
+		static_cast<int32_t>(p_block_u),
+		static_cast<int32_t>(p_block_v),
+		static_cast<uint8_t>(std::max(0, p_lod)),
+		multinet::rendering::ORDINARY_BCCM_V1_PROFILE,
+		0
+	};
+	const auto state = bccm_renderer.get_debug_block_state(key);
+	const auto resolution_name = [](multinet::rendering::ResolutionClass c) {
+		switch (c) {
+			case multinet::rendering::ResolutionClass::Analytic: return godot::String("Analytic");
+			case multinet::rendering::ResolutionClass::ExactResident: return godot::String("ExactResident");
+			case multinet::rendering::ResolutionClass::ExactReadyEmpty: return godot::String("ExactReadyEmpty");
+			case multinet::rendering::ResolutionClass::StalePrevious: return godot::String("StalePrevious");
+			case multinet::rendering::ResolutionClass::AbsoluteResident: return godot::String("AbsoluteResident");
+			case multinet::rendering::ResolutionClass::AbsoluteAnalyticFallback: return godot::String("AbsoluteAnalyticFallback");
+			default: return godot::String("NoContent");
+		}
+	};
+	const auto slot_name = [](multinet::rendering::TerrainGpuPageState s) {
+		switch (s) {
+			case multinet::rendering::TerrainGpuPageState::UploadPending: return godot::String("UploadPending");
+			case multinet::rendering::TerrainGpuPageState::Resident: return godot::String("Resident");
+			case multinet::rendering::TerrainGpuPageState::Retiring: return godot::String("Retiring");
+			default: return godot::String("Free");
+		}
+	};
+	result["submitted"] = state.submitted;
+	result["face"] = face_index;
+	result["block_u"] = key.block_u;
+	result["block_v"] = key.block_v;
+	result["lod"] = key.lod;
+	result["selected_layer"] = state.selected_gpu_layer;
+	result["resolution_class"] = resolution_name(state.resolution_class);
+	result["requested_content_version"] = state.requested_content_version;
+	result["selected_content_version"] = state.selected_content_version;
+	result["selected_slot_state"] = slot_name(state.selected_slot_state);
+	result["resident_same_block_count"] = state.resident_same_block_count;
+	result["upload_pending_same_block_count"] = state.upload_pending_same_block_count;
+	result["retiring_same_block_count"] = state.retiring_same_block_count;
+	result["retiring_content_version"] = state.retiring_content_version;
+	result["retire_after_frame"] = static_cast<int64_t>(state.retire_after_frame);
+	return result;
+}
 #endif
 
 // ---------------------------------------------------------------------------
@@ -327,26 +847,36 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 			if (!bccm_renderer.initialized() && get_world_3d().is_valid() && manifest_built && render_source) {
 				auto* rs = godot::RenderingServer::get_singleton();
 				Multinet::TerrainFallbackBounds fb = render_source->get_snapshot().fallback_bounds;
-				if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), manifest, recipe.identity, fb)) {
+				if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
 					std::cerr << "[MultinetBCCMNode3D] Renderer initialization failed (process)." << std::endl;
+				} else {
+		bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
 				}
 			}
 
 #ifdef DEBUG_ENABLED
-			// Editor debug path: direct-plane frustum culling from actual editor viewport camera.
-			// IMPORTANT: The PositiveX coordinate mapping below is debug-only scaffolding.
-			// It is not the runtime canonical observer and is not the future CHP authority.
-			if (manifest_built && editor_view_snapshot.valid) {
-				godot::Vector3 cam_pos = editor_view_snapshot.world_position;
-				// editor_frame_epoch is stable while the SurfaceFrame is unchanged.
-				// It is separate from publication_serial (which increments every frame).
-				set_canonical_camera_state_from_values(
-					0,
-					static_cast<double>(cam_pos.x),
-					static_cast<double>(cam_pos.z),
-					static_cast<double>(cam_pos.y > 0.0f ? cam_pos.y : 50.0f),
-					editor_view_snapshot.editor_frame_epoch
+			// Editor path: the viewport camera is a local displacement source. The
+			// persistent observer state owns canonical face/u/v and frame identity.
+			if (manifest_built && editor_view_snapshot.valid && editor_observer_state.valid) {
+				set_canonical_camera_state(
+					editor_observer_state.canonical_position,
+					editor_observer_state.active_frame,
+					editor_observer_state.frame_epoch
 				);
+				// Editor world X/Z is the stable flat presentation plane. Ground
+				// Y must stay canonical; otherwise the terrain follows the camera
+				// vertically and altitude becomes visually meaningless.
+				current_cam_state.presentation_x_m = editor_view_snapshot.world_position.x;
+				current_cam_state.presentation_z_m = editor_view_snapshot.world_position.z;
+				current_cam_state.unfolding_generation = editor_observer_state.presentation_generation;
+				current_cam_state.has_presentation_position = true;
+				current_cam_state.unfolding_root_frame = editor_observer_state.unfolding_root_frame;
+				current_cam_state.unfolding_root_presentation_x_m = editor_observer_state.unfolding_root_presentation_x_m;
+				current_cam_state.unfolding_root_presentation_z_m = editor_observer_state.unfolding_root_presentation_z_m;
+				current_cam_state.has_unfolding_root = true;
+				current_cam_state.has_presentation_binding = true;
+				current_cam_state.presentation_basis = godot::Basis();
+				current_cam_state.presentation_origin = editor_observer_state.presentation_origin_world;
 
 				if (bccm_renderer.initialized() && render_source && current_cam_state.frame_epoch > 0) {
 					if (!freeze_update) {
@@ -386,12 +916,15 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 				if (!bccm_renderer.initialized() && get_world_3d().is_valid() && manifest_built && render_source) {
 					auto* rs = godot::RenderingServer::get_singleton();
 					Multinet::TerrainFallbackBounds fb = render_source->get_snapshot().fallback_bounds;
-					if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), manifest, recipe.identity, fb)) {
+					if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
 						std::cerr << "[MultinetBCCMNode3D] Renderer initialization failed." << std::endl;
+					} else {
+						bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
 					}
 				}
 
 				if (bccm_renderer.initialized() && render_source && current_cam_state.frame_epoch > 0) {
+					current_cam_state.has_presentation_binding = false;
 					if (!freeze_update) {
 						bccm_renderer.update(cam, manifest, current_cam_state, source_expectation, render_source.get());
 					}
@@ -412,8 +945,10 @@ void MultinetBCCMNode3D::init_rendering() {
 	if (get_world_3d().is_valid()) {
 		auto* rs = godot::RenderingServer::get_singleton();
 		Multinet::TerrainFallbackBounds fb = render_source->get_snapshot().fallback_bounds;
-		if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), manifest, recipe.identity, fb)) {
+		if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
 			std::cerr << "[MultinetBCCMNode3D] Renderer initialization failed (init_rendering)." << std::endl;
+		} else {
+			bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
 		}
 	}
 }
@@ -422,6 +957,9 @@ void MultinetBCCMNode3D::free_rendering() {
 	bccm_renderer.cleanup();
 
 	// Shut down the source before the executor, so in-flight jobs can finish.
+#ifdef DEBUG_ENABLED
+	debug_release_held_delta_generation();
+#endif
 	if (render_source) {
 		render_source->shutdown();
 		render_source.reset();
@@ -437,6 +975,34 @@ void MultinetBCCMNode3D::free_rendering() {
 // ---------------------------------------------------------------------------
 // Recipe property setters / getters
 // ---------------------------------------------------------------------------
+
+void MultinetBCCMNode3D::set_source_mode(int p_mode) {
+	uint8_t m = static_cast<uint8_t>(p_mode < 0 ? 0 : (p_mode > 2 ? 2 : p_mode));
+	auto mode = static_cast<multinet::rendering::TerrainSourceMode>(m);
+	if (render_source) {
+		if (mode == multinet::rendering::TerrainSourceMode::HybridAdditiveDelta) {
+			render_source->set_payload_kind(Multinet::TerrainPagePayloadKind::AdditiveHeightDeltaV1);
+		} else if (mode == multinet::rendering::TerrainSourceMode::AbsoluteHeightPageDebug) {
+			render_source->set_payload_kind(Multinet::TerrainPagePayloadKind::AbsoluteHeightDebugV1);
+		} else if (mode == multinet::rendering::TerrainSourceMode::AnalyticBase) {
+			render_source->cancel_all_page_work_and_advance_epoch();
+		}
+	}
+	refresh_source_expectation_from_source();
+	bccm_renderer.set_source_mode(mode);
+}
+
+int MultinetBCCMNode3D::get_source_mode() const {
+	return static_cast<int>(bccm_renderer.get_source_mode());
+}
+
+void MultinetBCCMNode3D::set_analytic_debug_prewarm_pages(bool p_prewarm) {
+	bccm_renderer.set_analytic_debug_prewarm_pages(p_prewarm);
+}
+
+bool MultinetBCCMNode3D::get_analytic_debug_prewarm_pages() const {
+	return bccm_renderer.get_analytic_debug_prewarm_pages();
+}
 
 void MultinetBCCMNode3D::set_seed(uint32_t p_seed) {
 	if (recipe.identity.world_seed == p_seed) return;
@@ -521,6 +1087,220 @@ float MultinetBCCMNode3D::get_lacunarity() const {
 	return recipe.legacy_signals.lacunarity;
 }
 
+void MultinetBCCMNode3D::set_coordinate_wrapping(bool p_enabled) {
+	const auto requested = p_enabled ? Multinet::WorldDomainTopology::ClosedSurfaceSixFace : Multinet::WorldDomainTopology::FiniteRectangle;
+	if (world_domain_input.topology == requested) return;
+	if (p_enabled) {
+		uint64_t area = 0;
+		if (world_domain_input.finite.extent_x_m != 0 && world_domain_input.finite.extent_z_m <= (std::numeric_limits<uint64_t>::max)() / world_domain_input.finite.extent_x_m) {
+			area = world_domain_input.finite.extent_x_m * world_domain_input.finite.extent_z_m;
+		}
+		if (area == 0) return;
+		const uint64_t closed_side = static_cast<uint64_t>(std::llround(std::sqrt(static_cast<double>(area))));
+		if (closed_side < MIN_RENDERABLE_CLOSED_SIDE_M) {
+			domain_validation_message = "Closed wrapping needs an equivalent side of at least 0.079 km for the ordinary 32 m LOD0 block.";
+			return;
+		}
+		world_domain_input.closed_surface.area_equivalent_side_m = closed_side;
+	} else {
+		const uint64_t side = world_domain_input.closed_surface.area_equivalent_side_m;
+		if (side == 0) return;
+		world_domain_input.finite.extent_x_m = side;
+		world_domain_input.finite.extent_z_m = side;
+		square_world = true;
+	}
+	world_domain_input.topology = requested;
+	domain_rebuild_pending = true;
+	recipe_rebuild_pending = true;
+	source_dirty = true;
+	domain_validation_message = "OK";
+	notify_property_list_changed();
+}
+
+bool MultinetBCCMNode3D::get_coordinate_wrapping() const {
+	return world_domain_input.topology == Multinet::WorldDomainTopology::ClosedSurfaceSixFace;
+}
+
+void MultinetBCCMNode3D::set_square_world(bool p_enabled) {
+	if (square_world == p_enabled) return;
+	square_world = p_enabled;
+	domain_rebuild_pending = true;
+	recipe_rebuild_pending = true;
+	source_dirty = true;
+	notify_property_list_changed();
+}
+
+bool MultinetBCCMNode3D::get_square_world() const { return square_world; }
+
+void MultinetBCCMNode3D::set_world_side_km(double p_km) {
+	uint64_t metres = 0;
+	if (!try_km_to_world_metres(p_km, metres)) {
+		domain_validation_message = "World scale must be within 0.001 km and 4,294,967.295 km (UINT32_MAX metres).";
+		return;
+	}
+	if (get_coordinate_wrapping()) {
+		if (metres < MIN_RENDERABLE_CLOSED_SIDE_M) {
+			domain_validation_message = "Closed wrapping needs an equivalent side of at least 0.079 km for the ordinary 32 m LOD0 block.";
+			return;
+		}
+		world_domain_input.closed_surface.area_equivalent_side_m = metres;
+	} else {
+		world_domain_input.finite.extent_x_m = metres;
+		if (square_world) world_domain_input.finite.extent_z_m = metres;
+	}
+	domain_rebuild_pending = true;
+	recipe_rebuild_pending = true;
+	source_dirty = true;
+	domain_validation_message = "OK";
+}
+
+double MultinetBCCMNode3D::get_world_side_km() const {
+	return get_coordinate_wrapping()
+		? static_cast<double>(world_domain_input.closed_surface.area_equivalent_side_m) / 1000.0
+		: static_cast<double>(world_domain_input.finite.extent_x_m) / 1000.0;
+}
+
+void MultinetBCCMNode3D::set_world_extent_x_km(double p_km) {
+	uint64_t metres = 0;
+	if (!try_km_to_world_metres(p_km, metres)) {
+		domain_validation_message = "World extent X must be within 0.001 km and 4,294,967.295 km.";
+		return;
+	}
+	world_domain_input.finite.extent_x_m = metres;
+	if (square_world) world_domain_input.finite.extent_z_m = metres;
+	domain_rebuild_pending = true;
+	recipe_rebuild_pending = true;
+	source_dirty = true;
+	domain_validation_message = "OK";
+}
+
+double MultinetBCCMNode3D::get_world_extent_x_km() const { return static_cast<double>(world_domain_input.finite.extent_x_m) / 1000.0; }
+
+void MultinetBCCMNode3D::set_world_extent_z_km(double p_km) {
+	uint64_t metres = 0;
+	if (!try_km_to_world_metres(p_km, metres)) {
+		domain_validation_message = "World extent Z must be within 0.001 km and 4,294,967.295 km.";
+		return;
+	}
+	world_domain_input.finite.extent_z_m = metres;
+	if (square_world) world_domain_input.finite.extent_x_m = metres;
+	domain_rebuild_pending = true;
+	recipe_rebuild_pending = true;
+	source_dirty = true;
+	domain_validation_message = "OK";
+}
+
+double MultinetBCCMNode3D::get_world_extent_z_km() const { return static_cast<double>(world_domain_input.finite.extent_z_m) / 1000.0; }
+
+void MultinetBCCMNode3D::set_closed_equivalent_side_km(double p_km) {
+	uint64_t metres = 0;
+	if (!try_km_to_world_metres(p_km, metres)) {
+		domain_validation_message = "Closed equivalent side must be within 0.079 km and 4,294,967.295 km.";
+		return;
+	}
+	if (metres < MIN_RENDERABLE_CLOSED_SIDE_M) {
+		domain_validation_message = "Closed wrapping needs an equivalent side of at least 0.079 km for the ordinary 32 m LOD0 block.";
+		return;
+	}
+	world_domain_input.closed_surface.area_equivalent_side_m = metres;
+	domain_rebuild_pending = true;
+	recipe_rebuild_pending = true;
+	source_dirty = true;
+	domain_validation_message = "OK";
+}
+
+double MultinetBCCMNode3D::get_closed_equivalent_side_km() const { return static_cast<double>(world_domain_input.closed_surface.area_equivalent_side_m) / 1000.0; }
+
+void MultinetBCCMNode3D::set_chp_enabled(bool p_enabled) {
+	if (world_presentation_input.chp_enabled == p_enabled) return;
+	world_presentation_input.chp_enabled = p_enabled;
+	presentation_rebuild_pending = true;
+	world_presentation_manifest = Multinet::build_world_presentation_manifest(world_domain_manifest, world_presentation_input);
+	notify_property_list_changed();
+}
+
+bool MultinetBCCMNode3D::get_chp_enabled() const { return world_presentation_input.chp_enabled; }
+
+void MultinetBCCMNode3D::set_chp_radius_policy(int p_policy) {
+	const int clamped = std::clamp(p_policy, 0, 2);
+	world_presentation_input.chp_radius_policy = static_cast<Multinet::CHPRadiusPolicy>(clamped);
+	presentation_rebuild_pending = true;
+	world_presentation_manifest = Multinet::build_world_presentation_manifest(world_domain_manifest, world_presentation_input);
+	notify_property_list_changed();
+}
+
+int MultinetBCCMNode3D::get_chp_radius_policy() const { return static_cast<int>(world_presentation_input.chp_radius_policy); }
+
+void MultinetBCCMNode3D::set_chp_explicit_radius_km(double p_km) {
+	uint64_t metres = 0;
+	if (!try_km_to_world_metres(p_km, metres)) {
+		domain_validation_message = "CHP explicit radius must be within 0.001 km and 4,294,967.295 km.";
+		return;
+	}
+	world_presentation_input.explicit_chp_radius_mm = metres * 1000ULL;
+	presentation_rebuild_pending = true;
+	world_presentation_manifest = Multinet::build_world_presentation_manifest(world_domain_manifest, world_presentation_input);
+	notify_property_list_changed();
+}
+
+double MultinetBCCMNode3D::get_chp_explicit_radius_km() const { return static_cast<double>(world_presentation_input.explicit_chp_radius_mm) / 1000000.0; }
+
+double MultinetBCCMNode3D::get_canonical_area_km2() const { return static_cast<double>(world_domain_manifest.canonical_area_m2) / 1000000.0; }
+
+double MultinetBCCMNode3D::get_logical_radius_km() const {
+	return world_domain_manifest.is_valid()
+		? std::sqrt(static_cast<double>(world_domain_manifest.canonical_area_m2) / (4.0 * 3.14159265358979323846)) / 1000.0
+		: 0.0;
+}
+
+double MultinetBCCMNode3D::get_closed_face_extent_km() const {
+	return !world_domain_manifest.is_finite() && world_domain_manifest.is_valid()
+		? world_domain_manifest.closed_surface.area_equivalent_face_extent_m / 1000.0
+		: 0.0;
+}
+
+double MultinetBCCMNode3D::get_closed_face_half_extent_km() const {
+	return !world_domain_manifest.is_finite() && world_domain_manifest.is_valid()
+		? static_cast<double>(world_domain_manifest.closed_surface.chart_half_extent_mm) * 0.001 / 1000.0
+		: 0.0;
+}
+
+uint32_t MultinetBCCMNode3D::get_regions_per_face_axis() const {
+	return !world_domain_manifest.is_finite() && world_domain_manifest.is_valid()
+		? world_domain_manifest.closed_surface.regions_per_face_axis
+		: 0;
+}
+
+double MultinetBCCMNode3D::get_actual_region_extent_m() const {
+	return !world_domain_manifest.is_finite() && world_domain_manifest.is_valid()
+		? world_domain_manifest.closed_surface.actual_region_extent_m
+		: 0.0;
+}
+
+uint64_t MultinetBCCMNode3D::get_active_domain_hash() const { return world_domain_manifest.domain_manifest_hash; }
+
+uint64_t MultinetBCCMNode3D::get_active_presentation_hash() const { return world_presentation_manifest.presentation_manifest_hash; }
+
+godot::String MultinetBCCMNode3D::get_active_domain_hash_text() const {
+	std::ostringstream stream;
+	stream << "0x" << std::uppercase << std::hex << std::setw(16) << std::setfill('0') << get_active_domain_hash();
+	return godot::String(stream.str().c_str());
+}
+
+godot::String MultinetBCCMNode3D::get_active_presentation_hash_text() const {
+	std::ostringstream stream;
+	stream << "0x" << std::uppercase << std::hex << std::setw(16) << std::setfill('0') << get_active_presentation_hash();
+	return godot::String(stream.str().c_str());
+}
+
+godot::String MultinetBCCMNode3D::get_domain_validation_message() const {
+	return domain_validation_message;
+}
+
+godot::String MultinetBCCMNode3D::get_chp_status() const {
+	return "NOT IMPLEMENTED / INACTIVE";
+}
+
 void MultinetBCCMNode3D::set_camera_target(const godot::NodePath& p_path) { camera_target = p_path; }
 godot::NodePath MultinetBCCMNode3D::get_camera_target() const { return camera_target; }
 
@@ -546,9 +1326,134 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["initialized"] = bccm_renderer.initialized();
 	dict["valid_publication"] = (current_cam_state.frame_epoch > 0);
 	dict["submitted_streams"] = get_submitted_streams();
+	dict["world_domain_topology"] = static_cast<int>(world_domain_input.topology);
+	dict["world_domain_topology_name"] = world_domain_input.topology == Multinet::WorldDomainTopology::FiniteRectangle
+		? "FiniteRectangle" : "ClosedSurfaceSixFace";
+	dict["coordinate_wrapping"] = get_coordinate_wrapping();
+	dict["chp_requested"] = world_presentation_input.chp_enabled;
+	dict["chp_effective"] = false; // CHP geometry is intentionally deferred to WP6.1.
+	dict["chp_implementation_state"] = "NOT IMPLEMENTED / INACTIVE";
+	dict["chp_radius_policy"] = static_cast<int>(world_presentation_manifest.chp_radius_policy);
+	dict["resolved_chp_radius_km"] = static_cast<double>(world_presentation_manifest.resolved_chp_radius_mm) / 1000000.0;
+	dict["canonical_area_km2"] = get_canonical_area_km2();
+	dict["logical_radius_km"] = get_logical_radius_km();
+	dict["closed_face_extent_km"] = get_closed_face_extent_km();
+	dict["closed_face_half_extent_km"] = get_closed_face_half_extent_km();
+	dict["regions_per_face_axis"] = get_regions_per_face_axis();
+	dict["actual_region_extent_m"] = get_actual_region_extent_m();
+	dict["effective_bccm_lod_count"] = bccm_renderer.get_effective_level_count();
+	dict["effective_bccm_lod_max"] = bccm_renderer.get_effective_level_count() > 0 ? bccm_renderer.get_effective_level_count() - 1 : 0;
+	dict["domain_validation_message"] = domain_validation_message;
+	dict["domain_topology_version"] = world_domain_manifest.topology_version;
+	dict["domain_projection_version"] = world_domain_manifest.projection_version;
+	dict["bccm_analytic_normal_version"] = Multinet::BCCM_ANALYTIC_NORMAL_VERSION_2;
+	dict["domain_manifest_hash"] = static_cast<int64_t>(world_domain_manifest.domain_manifest_hash);
+	dict["presentation_manifest_hash"] = static_cast<int64_t>(world_presentation_manifest.presentation_manifest_hash);
+	dict["domain_manifest_hash_text"] = get_active_domain_hash_text();
+	dict["presentation_manifest_hash_text"] = get_active_presentation_hash_text();
+	dict["canonical_observer_face"] = static_cast<int>(current_cam_state.canonical_position.face);
+	dict["canonical_observer_u_m"] = current_cam_state.canonical_position.u_m;
+	dict["canonical_observer_v_m"] = current_cam_state.canonical_position.v_m;
+	dict["canonical_observer_altitude_m"] = current_cam_state.canonical_position.altitude_m;
+	dict["canonical_observer_frame_epoch"] = static_cast<int64_t>(current_cam_state.frame_epoch);
+	dict["presentation_observer_x_m"] = current_cam_state.presentation_x_m;
+	dict["presentation_observer_z_m"] = current_cam_state.presentation_z_m;
+	dict["presentation_unfolding_generation"] = static_cast<int64_t>(current_cam_state.unfolding_generation);
+	dict["sampling_chart_anchor_x_m"] = current_cam_state.unfolding_root_presentation_x_m;
+	dict["sampling_chart_anchor_z_m"] = current_cam_state.unfolding_root_presentation_z_m;
+	dict["sampling_chart_anchor_face"] = static_cast<int>(current_cam_state.unfolding_root_frame.origin.face);
+	dict["runtime_ground_speed_m_s"] = runtime_ground_speed_m_s;
+	dict["runtime_vertical_speed_m_s"] = runtime_vertical_speed_m_s;
+	dict["runtime_total_speed_m_s"] = runtime_total_speed_m_s;
+	dict["runtime_last_transition_count"] = runtime_last_transition_count;
+	dict["runtime_last_transition_source_face"] = runtime_last_transition_source_face;
+	dict["runtime_last_transition_destination_face"] = runtime_last_transition_destination_face;
+	dict["runtime_last_transition_edge"] = runtime_last_transition_edge;
+	dict["runtime_outside_finite_boundary"] = runtime_outside_finite_boundary;
+	const auto& streaming = bccm_renderer.get_last_streaming_diagnostics();
+	dict["closed_placement_failures"] = streaming.closed_placement_failures;
+	dict["canonical_duplicate_presentations_retained"] = streaming.canonical_duplicate_presentations_retained;
+	dict["maximum_patch_transition_count"] = streaming.maximum_patch_transition_count;
+#ifdef DEBUG_ENABLED
+	dict["editor_observer_valid"] = editor_observer_state.valid;
+	dict["editor_observer_face"] = static_cast<int>(editor_observer_state.canonical_position.face);
+	dict["editor_observer_u_m"] = editor_observer_state.canonical_position.u_m;
+	dict["editor_observer_v_m"] = editor_observer_state.canonical_position.v_m;
+	dict["editor_observer_altitude_m"] = editor_observer_state.canonical_position.altitude_m;
+	dict["editor_observer_frame_epoch"] = static_cast<int64_t>(editor_observer_state.frame_epoch);
+	dict["editor_observer_ground_speed_m_s"] = editor_observer_state.ground_speed_m_s;
+	dict["editor_observer_vertical_speed_m_s"] = editor_observer_state.vertical_speed_m_s;
+	dict["editor_observer_total_speed_m_s"] = editor_observer_state.total_speed_m_s;
+	dict["editor_last_transition_count"] = editor_observer_state.last_transition_count;
+	dict["editor_view_world_x_m"] = editor_view_snapshot.world_position.x;
+	dict["editor_view_world_y_m"] = editor_view_snapshot.world_position.y;
+	dict["editor_view_world_z_m"] = editor_view_snapshot.world_position.z;
+	dict["editor_ground_origin_y_m"] = editor_view_snapshot.world_position.y -
+		static_cast<float>(editor_observer_state.canonical_position.altitude_m);
+	const float expected_binding_origin_y = world_domain_manifest.is_finite()
+		? static_cast<float>(editor_observer_state.canonical_position.altitude_m)
+		: editor_view_snapshot.world_position.y -
+			static_cast<float>(editor_observer_state.canonical_position.altitude_m);
+	dict["editor_presentation_origin_y_m"] = current_cam_state.presentation_origin.y;
+	dict["editor_altitude_tracking_error_m"] =
+		expected_binding_origin_y - current_cam_state.presentation_origin.y;
+	dict["editor_last_transition_source_face"] = editor_observer_state.last_transition_source_face;
+	dict["editor_last_transition_destination_face"] = editor_observer_state.last_transition_destination_face;
+	dict["editor_last_transition_edge"] = editor_observer_state.last_transition_edge;
+	dict["editor_outside_viewport_camera"] = editor_observer_state.outside_viewport_camera;
+#endif
+	const double observer_u_m = current_cam_state.canonical_position.u_m;
+	const double observer_v_m = current_cam_state.canonical_position.v_m;
+	if (world_domain_manifest.is_finite()) {
+		dict["finite_extent_x_km"] = get_world_extent_x_km();
+		dict["finite_extent_z_km"] = get_world_extent_z_km();
+		dict["finite_regions_x"] = world_domain_manifest.finite.regions_x;
+		dict["finite_regions_z"] = world_domain_manifest.finite.regions_z;
+		dict["finite_actual_region_extent_x_m"] = world_domain_manifest.finite.actual_region_extent_x_m;
+		dict["finite_actual_region_extent_z_m"] = world_domain_manifest.finite.actual_region_extent_z_m;
+		const double hx = static_cast<double>(world_domain_manifest.finite.half_extent_x_mm) * 0.001;
+		const double hz = static_cast<double>(world_domain_manifest.finite.half_extent_z_mm) * 0.001;
+		dict["finite_distance_to_x_minus_m"] = observer_u_m + hx;
+		dict["finite_distance_to_x_plus_m"] = hx - observer_u_m;
+		dict["finite_distance_to_z_minus_m"] = observer_v_m + hz;
+		dict["finite_distance_to_z_plus_m"] = hz - observer_v_m;
+	} else {
+		dict["closed_equivalent_side_km"] = get_closed_equivalent_side_km();
+		const double chart_max_radius_m = Multinet::closed_flat_chart_max_radius_m(world_domain_manifest);
+		const double chart_dx_m = current_cam_state.presentation_x_m - current_cam_state.unfolding_root_presentation_x_m;
+		const double chart_dz_m = current_cam_state.presentation_z_m - current_cam_state.unfolding_root_presentation_z_m;
+		const double chart_observer_offset_m = std::sqrt(chart_dx_m * chart_dx_m + chart_dz_m * chart_dz_m);
+		dict["closed_flat_chart_max_radius_m"] = chart_max_radius_m;
+		dict["closed_flat_chart_observer_offset_m"] = chart_observer_offset_m;
+		dict["closed_flat_chart_observer_inside"] = chart_observer_offset_m <= chart_max_radius_m;
+		dict["closed_face_extent_km"] = world_domain_manifest.is_valid() ? world_domain_manifest.closed_surface.area_equivalent_face_extent_m / 1000.0 : 0.0;
+		dict["closed_face_half_extent_km"] = world_domain_manifest.is_valid() ? world_domain_manifest.closed_surface.chart_half_extent_mm * 0.001 / 1000.0 : 0.0;
+		const double h = world_domain_manifest.is_valid() ? world_domain_manifest.closed_surface.chart_half_extent_mm * 0.001 : 0.0;
+		dict["closed_distance_to_negative_u_m"] = h + observer_u_m;
+		dict["closed_distance_to_positive_u_m"] = h - observer_u_m;
+		dict["closed_distance_to_negative_v_m"] = h + observer_v_m;
+		dict["closed_distance_to_positive_v_m"] = h - observer_v_m;
+	}
 
 	auto snap = std::make_unique<multinet::rendering::RendererDiagnosticSnapshot>();
 	bccm_renderer.get_diagnostic_snapshot(*snap);
+	const auto detailed = bccm_renderer.get_detailed_diagnostics();
+	const auto source_mode = bccm_renderer.get_source_mode();
+	dict["source_mode"] = static_cast<int>(source_mode);
+	dict["source_mode_name"] = source_mode == multinet::rendering::TerrainSourceMode::AnalyticBase
+		? "AnalyticBase"
+		: (source_mode == multinet::rendering::TerrainSourceMode::HybridAdditiveDelta ? "HybridAdditiveDelta" : "AbsoluteHeightPageDebug");
+	dict["committed_publication_version"] = render_source ? render_source->get_snapshot().committed_delta_version : 0;
+	dict["source_pending_count"] = detailed.source_pending_count;
+	dict["source_in_flight_count"] = detailed.source_in_flight_count;
+	dict["resident_delta_layers"] = detailed.resident_delta_layers;
+	dict["upload_pending_delta_layers"] = detailed.upload_pending_delta_layers;
+	dict["stale_previous_visible_instance_count"] = detailed.stale_delta_pages_retained;
+	dict["ready_empty_visible_instance_count"] = detailed.hybrid_ready_empty_instances;
+	dict["analytic_visible_instance_count"] = detailed.analytic_base_visible_instances;
+	dict["hybrid_visible_instance_count"] = detailed.hybrid_visible_instances;
+	dict["visible_constant_fallback_instance_count"] = detailed.visible_constant_fallback_instances;
+	dict["submitted_stream_count"] = get_submitted_streams();
 
 	uint32_t active_residency = 0;
 	uint32_t max_layer = 0;
@@ -581,10 +1486,6 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 			uint8_t face = static_cast<uint8_t>(diag.key.face);
 			uint32_t layer = diag.gpu_layer;
 
-			if (current_cam_state.frame_epoch == 30 && lod == 0) {
-				std::cerr << "[FRAME30-DIAG] lod=" << (int)lod << " i=" << i << " face=" << (int)face << " layer=" << layer << std::endl;
-			}
-			
 			if (face < 6) {
 				face_visible_count[face]++;
 				if (layer > 0) face_non_fallback_count[face]++;
@@ -606,6 +1507,32 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["active_residency_count"] = active_residency;
 	dict["max_resolved_layer"] = max_layer;
 
+	// WP5.1 Emergency Repair live editor diagnostics
+	const auto& sd = snap->streaming_diagnostics;
+	dict["frame_demand_count"] = sd.frame_demand_count;
+	dict["wanted_set_count"] = sd.wanted_set_count;
+	dict["wanted_set_overflow"] = sd.wanted_set_overflow;
+	dict["pending_poison_count"] = sd.pending_poison_count;
+	dict["cancelled_retryable_count"] = sd.cancelled_retryable_count;
+	dict["terminal_bootstrap_required"] = sd.terminal_bootstrap_required;
+	dict["terminal_bootstrap_resident"] = sd.terminal_bootstrap_resident;
+	dict["lod_7_layer_zero_visible"] = sd.lod_7_layer_zero_visible;
+	dict["previous_plan_retained_due_to_flat_bootstrap"] = sd.previous_plan_retained_due_to_flat_bootstrap;
+	dict["next_ring_terminal_keys_required"] = sd.next_ring_terminal_keys_required;
+	dict["next_ring_terminal_keys_resident"] = sd.next_ring_terminal_keys_resident;
+	dict["ring_transaction_pending"] = sd.ring_transaction_pending;
+	dict["ring_transaction_age_ms"] = sd.ring_transaction_age_ms;
+
+	for (uint8_t lod = 0; lod < 8; ++lod) {
+		godot::String lod_prefix = "lod_" + godot::String::num_int64(lod);
+		dict[lod_prefix + "_visible_keys"] = snap->lods[lod].visible_keys_count;
+		dict[lod_prefix + "_resident_visible_keys"] = snap->lods[lod].resident_visible_keys_count;
+		dict[lod_prefix + "_ready_awaiting_gpu"] = snap->lods[lod].ready_awaiting_gpu_count;
+		dict[lod_prefix + "_uploaded_this_frame"] = snap->lods[lod].uploaded_this_frame_count;
+		dict[lod_prefix + "_layer_zero_visible"] = snap->lods[lod].layer_zero_visible_count;
+		dict[lod_prefix + "_next_snap_prefetch_keys"] = snap->lods[lod].next_snap_prefetch_keys_count;
+	}
+
 	uint8_t active_face = static_cast<uint8_t>(current_cam_state.canonical_position.face);
 	const Multinet::EdgeTransition& trans = Multinet::get_edge_transition(active_face, Multinet::SurfaceEdge::PositiveU);
 	uint8_t expected_dest_face = trans.destination_face;
@@ -624,6 +1551,201 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 }
 
 #ifdef DEBUG_ENABLED
+void MultinetBCCMNode3D::update_editor_observer_from_editor_camera() {
+	if (!editor_view_snapshot.valid || !world_domain_manifest.is_valid()) {
+		editor_observer_state.valid = false;
+		return;
+	}
+	const godot::Vector3 current = editor_view_snapshot.world_position;
+	const uint64_t now_us = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count());
+	const bool domain_changed = editor_observer_state.domain_manifest_hash != world_domain_manifest.domain_manifest_hash;
+	if (!editor_observer_state.initialized || domain_changed) {
+		editor_observer_state = EditorCanonicalObserverState{};
+		editor_observer_state.initialized = true;
+		editor_observer_state.topology = world_domain_input.topology;
+		editor_observer_state.domain_manifest_hash = world_domain_manifest.domain_manifest_hash;
+		editor_observer_state.canonical_position.face = Multinet::SurfaceFace::PositiveX;
+		if (world_domain_manifest.is_finite()) {
+			const double half_x_m = static_cast<double>(world_domain_manifest.finite.half_extent_x_mm) * 0.001;
+			const double half_z_m = static_cast<double>(world_domain_manifest.finite.half_extent_z_mm) * 0.001;
+			editor_observer_state.canonical_position.u_m = std::clamp(static_cast<double>(current.x), -half_x_m, half_x_m);
+			editor_observer_state.canonical_position.v_m = std::clamp(static_cast<double>(current.z), -half_z_m, half_z_m);
+			editor_observer_state.outside_viewport_camera =
+				std::abs(static_cast<double>(current.x) - editor_observer_state.canonical_position.u_m) > 1e-6 ||
+				std::abs(static_cast<double>(current.z) - editor_observer_state.canonical_position.v_m) > 1e-6;
+		} else {
+			editor_observer_state.canonical_position.u_m = 0.0;
+			editor_observer_state.canonical_position.v_m = 0.0;
+		}
+		editor_observer_state.canonical_position.altitude_m = static_cast<double>(current.y);
+		editor_observer_state.canonical_position.topology_version = world_domain_manifest.topology_version;
+		editor_observer_state.canonical_position.projection_version = world_domain_manifest.projection_version;
+		editor_observer_state.frame_epoch = 1;
+		editor_observer_state.active_frame = make_editor_frame_for_face(
+			world_domain_input.topology,
+			editor_observer_state.canonical_position.face,
+		editor_observer_state.canonical_position,
+		editor_observer_state.frame_epoch,
+			world_domain_manifest.topology_version,
+			world_domain_manifest.projection_version
+		);
+		editor_observer_state.unfolding_root_frame = editor_observer_state.active_frame;
+		editor_observer_state.unfolding_root_frame.origin.altitude_m = 0.0;
+		if (!world_domain_manifest.is_finite() && (current.x != 0.0f || current.z != 0.0f)) {
+			// Preserve the editor's existing flat X/Z location when wrapping is
+			// enabled or rebuilt. Starting every closed world at canonical zero
+			// made toggles teleport the terrain under a stationary editor camera.
+			Multinet::SurfacePosition64 initial_position{};
+			Multinet::SurfaceFrame initial_frame{};
+			uint32_t initial_transitions = 0;
+			const Multinet::FramePosition64 initial_delta{
+				static_cast<double>(current.x), 0.0, static_cast<double>(current.z)
+			};
+			if (!Multinet::try_advance_domain_surface_frame(
+				initial_delta,
+				world_domain_manifest,
+				editor_observer_state.active_frame,
+				initial_frame,
+				initial_position,
+				initial_transitions
+			)) {
+				editor_observer_state.valid = false;
+				return;
+			}
+			editor_observer_state.canonical_position = initial_position;
+			editor_observer_state.active_frame = initial_frame;
+			editor_observer_state.frame_epoch = initial_frame.frame_epoch;
+		}
+		editor_observer_state.unfolding_root_frame = editor_observer_state.active_frame;
+		editor_observer_state.unfolding_root_frame.origin.altitude_m = 0.0;
+		editor_observer_state.unfolding_root_presentation_x_m = static_cast<double>(current.x);
+		editor_observer_state.unfolding_root_presentation_z_m = static_cast<double>(current.z);
+		editor_observer_state.presentation_origin_world = world_domain_manifest.is_finite()
+			? godot::Vector3(
+				static_cast<float>(editor_observer_state.canonical_position.u_m),
+				static_cast<float>(editor_observer_state.canonical_position.altitude_m),
+				static_cast<float>(editor_observer_state.canonical_position.v_m))
+			: godot::Vector3(current.x, 0.0f, current.z);
+		editor_observer_state.presentation_generation = 1;
+		editor_observer_state.last_editor_camera_world_position = current;
+		editor_observer_state.has_last_editor_camera_world_position = true;
+		editor_observer_state.last_update_monotonic_us = now_us;
+		editor_observer_state.valid = true;
+	} else if (editor_observer_state.has_last_editor_camera_world_position) {
+		const godot::Vector3 delta = current - editor_observer_state.last_editor_camera_world_position;
+		const double delta_seconds = editor_observer_state.last_update_monotonic_us > 0 &&
+			now_us > editor_observer_state.last_update_monotonic_us
+			? static_cast<double>(now_us - editor_observer_state.last_update_monotonic_us) / 1000000.0
+			: 0.0;
+		if (delta_seconds > 0.0) {
+			const double dx = static_cast<double>(delta.x);
+			const double dy = static_cast<double>(delta.y);
+			const double dz = static_cast<double>(delta.z);
+			editor_observer_state.ground_speed_m_s = std::sqrt(dx * dx + dz * dz) / delta_seconds;
+			editor_observer_state.vertical_speed_m_s = dy / delta_seconds;
+			editor_observer_state.total_speed_m_s = std::sqrt(dx * dx + dy * dy + dz * dz) / delta_seconds;
+		} else {
+			editor_observer_state.ground_speed_m_s = 0.0;
+			editor_observer_state.vertical_speed_m_s = 0.0;
+			editor_observer_state.total_speed_m_s = 0.0;
+		}
+		// Finite terrain owns Godot world X/Z directly. The editor camera remains
+		// free outside the rectangle while canonical diagnostics stop at its edge.
+		// Closed mode continues to transport editor intent through the active frame.
+		Multinet::FramePosition64 local_delta{};
+		bool finite_target_outside = false;
+		if (world_domain_manifest.is_finite()) {
+			const double half_x_m = static_cast<double>(world_domain_manifest.finite.half_extent_x_mm) * 0.001;
+			const double half_z_m = static_cast<double>(world_domain_manifest.finite.half_extent_z_mm) * 0.001;
+			const double desired_u_m = static_cast<double>(current.x);
+			const double desired_v_m = static_cast<double>(current.z);
+			const double target_u_m = std::clamp(desired_u_m, -half_x_m, half_x_m);
+			const double target_v_m = std::clamp(desired_v_m, -half_z_m, half_z_m);
+			finite_target_outside = std::abs(desired_u_m - target_u_m) > 1e-6 ||
+				std::abs(desired_v_m - target_v_m) > 1e-6;
+			local_delta = Multinet::FramePosition64{
+				target_u_m - editor_observer_state.canonical_position.u_m,
+				static_cast<double>(current.y) - editor_observer_state.canonical_position.altitude_m,
+				target_v_m - editor_observer_state.canonical_position.v_m
+			};
+		} else {
+			local_delta = Multinet::FramePosition64{
+				editor_observer_state.active_frame.tangent_basis.u_axis.x * static_cast<double>(delta.x) +
+					editor_observer_state.active_frame.tangent_basis.u_axis.z * static_cast<double>(delta.z),
+				static_cast<double>(delta.y),
+				editor_observer_state.active_frame.tangent_basis.v_axis.x * static_cast<double>(delta.x) +
+					editor_observer_state.active_frame.tangent_basis.v_axis.z * static_cast<double>(delta.z)
+			};
+		}
+		Multinet::SurfacePosition64 next_position;
+		Multinet::SurfaceFrame next_frame;
+		uint32_t transition_count = 0;
+		editor_observer_state.last_transition_count = 0;
+		Multinet::SurfaceFace last_source = editor_observer_state.canonical_position.face;
+		Multinet::SurfaceFace last_destination = last_source;
+		Multinet::SurfaceEdge last_edge = Multinet::SurfaceEdge::NegativeU;
+		if (Multinet::try_advance_domain_surface_frame(
+			local_delta,
+			world_domain_manifest,
+			editor_observer_state.active_frame,
+			next_frame,
+			next_position,
+			transition_count,
+			&last_source,
+			&last_destination,
+			&last_edge
+		)) {
+			editor_observer_state.outside_viewport_camera = finite_target_outside;
+			editor_observer_state.canonical_position = next_position;
+			editor_observer_state.active_frame = next_frame;
+			editor_observer_state.frame_epoch = next_frame.frame_epoch;
+			if (world_domain_manifest.is_finite()) {
+				editor_observer_state.presentation_origin_world = godot::Vector3(
+					static_cast<float>(next_position.u_m),
+					static_cast<float>(next_position.altitude_m),
+					static_cast<float>(next_position.v_m)
+				);
+			} else {
+				editor_observer_state.presentation_origin_world = godot::Vector3(
+					current.x,
+					current.y - static_cast<float>(next_position.altitude_m),
+					current.z
+				);
+				const double chart_dx_m = static_cast<double>(current.x) -
+					editor_observer_state.unfolding_root_presentation_x_m;
+				const double chart_dz_m = static_cast<double>(current.z) -
+					editor_observer_state.unfolding_root_presentation_z_m;
+				const double rebase_radius_m =
+					Multinet::closed_flat_chart_max_radius_m(world_domain_manifest) * 0.25;
+				if (rebase_radius_m > 0.0 &&
+					chart_dx_m * chart_dx_m + chart_dz_m * chart_dz_m > rebase_radius_m * rebase_radius_m) {
+					editor_observer_state.unfolding_root_frame = next_frame;
+					editor_observer_state.unfolding_root_frame.origin.altitude_m = 0.0;
+					editor_observer_state.unfolding_root_presentation_x_m = static_cast<double>(current.x);
+					editor_observer_state.unfolding_root_presentation_z_m = static_cast<double>(current.z);
+					editor_observer_state.presentation_generation =
+						editor_observer_state.presentation_generation == (std::numeric_limits<uint64_t>::max)()
+						? 1 : editor_observer_state.presentation_generation + 1;
+				}
+			}
+			editor_observer_state.last_transition_count = transition_count;
+			if (transition_count > 0) {
+				editor_observer_state.last_transition_source_face = static_cast<int>(last_source);
+				editor_observer_state.last_transition_destination_face = static_cast<int>(last_destination);
+				editor_observer_state.last_transition_edge = static_cast<int>(last_edge);
+			}
+		} else if (world_domain_manifest.is_finite()) {
+			editor_observer_state.outside_viewport_camera = true;
+		}
+	}
+	editor_observer_state.last_editor_camera_world_position = current;
+	editor_observer_state.has_last_editor_camera_world_position = true;
+	editor_observer_state.last_update_monotonic_us = now_us;
+	editor_view_snapshot.editor_frame_epoch = editor_observer_state.frame_epoch;
+	editor_view_snapshot.last_editor_face = static_cast<int>(editor_observer_state.canonical_position.face);
+}
+
 void MultinetBCCMNode3D::publish_editor_view_camera(godot::Camera3D* p_editor_camera) {
 	if (!Engine::get_singleton()->is_editor_hint() || !p_editor_camera) {
 		editor_view_snapshot.valid = false;
@@ -641,20 +1763,8 @@ void MultinetBCCMNode3D::publish_editor_view_camera(godot::Camera3D* p_editor_ca
 		// Never used as frame_epoch — kept separate for bookkeeping only.
 		editor_view_snapshot.publication_serial++;
 
-		// editor_frame_epoch: increments only when the SurfaceFrame identity changes.
-		// The editor debug path always maps to PositiveX (face index 0).
-		// So the epoch is set to 1 on first valid snapshot and stays stable
-		// until the face changes (which is debug-only scaffolding and not
-		// the runtime canonical observer or future CHP authority).
-		constexpr int k_editor_debug_face = 0; // PositiveX — debug scaffolding only
-		if (editor_view_snapshot.last_editor_face != k_editor_debug_face) {
-			editor_view_snapshot.last_editor_face = k_editor_debug_face;
-			editor_view_snapshot.editor_frame_epoch++;
-		}
-		// If editor_frame_epoch is still 0 (first snapshot), initialise to 1.
-		if (editor_view_snapshot.editor_frame_epoch == 0) {
-			editor_view_snapshot.editor_frame_epoch = 1;
-		}
+		// The observer update below owns canonical frame identity and epoch.
+		update_editor_observer_from_editor_camera();
 	}
 }
 #endif
