@@ -1092,7 +1092,7 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 				place.block_to_active_frame, godot::Vector3(0, 0, 0)
 			).xform(place.local_aabb);
 			global_aabb.position += place.local_origin;
-			if (closed_presentation && has_active_presentation_binding) {
+			if (has_active_presentation_binding) {
 				global_aabb.position += active_view_world_position;
 			}
 			bool is_visible = frustum.intersects_aabb(global_aabb);
@@ -1795,7 +1795,7 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 			uint32_t logical_chart_bit = uses_logical_chart ? (1u << 11u) : 0u;
 			uint32_t bounded_logical_chart_bit = uses_bounded_logical_chart ? (1u << 12u) : 0u;
 			uint32_t camera_relative_render_bit =
-				closed_presentation && has_active_presentation_binding ? (1u << 16u) : 0u;
+				has_active_presentation_binding ? (1u << 16u) : 0u;
 			float r_packed = static_cast<float>(
 				face_bits | color_face_bits | edge_bits | orientation_bits | patch_bit | coherent_bit |
 				logical_chart_bit | bounded_logical_chart_bit | camera_relative_render_bit);
@@ -2204,7 +2204,11 @@ BlockPlacement BlockClipmapRenderer::build_block_placement(
 	godot::Vector3 local_origin(static_cast<float>(f_min.x), static_cast<float>(f_min.y), static_cast<float>(f_min.z));
 	if (has_active_presentation_binding) {
 		block_basis = active_presentation_basis * block_basis;
-		local_origin = active_presentation_origin + active_presentation_basis.xform(local_origin);
+		// Editor placement is camera-relative for finite worlds as well as closed
+		// worlds. Keep the canonical block coordinate in double precision until
+		// the final small relative translation reaches the MultiMesh buffer.
+		local_origin = (active_presentation_origin - active_view_world_position) +
+			active_presentation_basis.xform(local_origin);
 	}
 
 	return BlockPlacement{ block_basis, local_origin, aabb, true };
