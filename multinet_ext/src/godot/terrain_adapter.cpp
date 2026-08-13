@@ -1515,7 +1515,7 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["domain_validation_message"] = domain_validation_message;
 	dict["domain_topology_version"] = world_domain_manifest.topology_version;
 	dict["domain_projection_version"] = world_domain_manifest.projection_version;
-	dict["bccm_analytic_normal_version"] = Multinet::BCCM_ANALYTIC_NORMAL_VERSION_2;
+	dict["bccm_analytic_normal_version"] = Multinet::BCCM_ANALYTIC_NORMAL_VERSION_3;
 	dict["domain_manifest_hash"] = static_cast<int64_t>(world_domain_manifest.domain_manifest_hash);
 	dict["presentation_manifest_hash"] = static_cast<int64_t>(world_presentation_manifest.presentation_manifest_hash);
 	dict["domain_manifest_hash_text"] = get_active_domain_hash_text();

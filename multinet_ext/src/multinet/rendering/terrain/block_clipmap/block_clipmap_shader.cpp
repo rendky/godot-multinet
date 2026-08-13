@@ -114,6 +114,43 @@ float sample_noise_3d(vec3 p_pos, float frequency, uint seed) {
 	return mix(ny0, ny1, t.z);
 }
 
+vec4 sample_noise_3d_value_gradient(vec3 p_pos, float frequency, uint seed) {
+	vec3 p = p_pos * frequency;
+	vec3 floor_p = floor(p);
+	ivec3 i0 = ivec3(floor_p);
+	ivec3 i1 = i0 + ivec3(1);
+	vec3 f = p - floor_p;
+	vec3 t = vec3(smoothstep_val(f.x), smoothstep_val(f.y), smoothstep_val(f.z));
+	vec3 dt = 6.0 * f * (vec3(1.0) - f);
+
+	float n000 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i0.y), uint(i0.z), seed));
+	float n100 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i0.y), uint(i0.z), seed));
+	float n010 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i1.y), uint(i0.z), seed));
+	float n110 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i1.y), uint(i0.z), seed));
+	float n001 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i0.y), uint(i1.z), seed));
+	float n101 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i0.y), uint(i1.z), seed));
+	float n011 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i1.y), uint(i1.z), seed));
+	float n111 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i1.y), uint(i1.z), seed));
+
+	float nx00 = mix(n000, n100, t.x);
+	float nx10 = mix(n010, n110, t.x);
+	float nx01 = mix(n001, n101, t.x);
+	float nx11 = mix(n011, n111, t.x);
+	float ny0 = mix(nx00, nx10, t.y);
+	float ny1 = mix(nx01, nx11, t.y);
+
+	float dx0 = mix((n100 - n000) * dt.x, (n110 - n010) * dt.x, t.y);
+	float dx1 = mix((n101 - n001) * dt.x, (n111 - n011) * dt.x, t.y);
+	float dy0 = (nx10 - nx00) * dt.y;
+	float dy1 = (nx11 - nx01) * dt.y;
+	vec3 gradient = vec3(
+		mix(dx0, dx1, t.z),
+		mix(dy0, dy1, t.z),
+		(ny1 - ny0) * dt.z
+	) * frequency;
+	return vec4(mix(ny0, ny1, t.z), gradient);
+}
+
 float f_forward_cobe(float a, float b) {
 	float a2 = a * a;
 	float b2 = b * b;
@@ -230,6 +267,40 @@ float eval_closed_analytic_height_direction(vec3 dir) {
 	}
 }
 
+vec4 eval_closed_analytic_height_gradient_direction(vec3 dir) {
+	vec3 phys_pos = dir * logical_area_radius_m;
+	float amp = 1.0;
+	float freq = continental_frequency;
+	float total_elev = 0.0;
+	float max_poss = 0.0;
+	vec3 total_gradient = vec3(0.0);
+
+	for (uint oct = 0u; oct < octave_count; ++oct) {
+		uint seed = terrain_seed ^ (oct * 1013u);
+		vec4 noise = sample_noise_3d_value_gradient(phys_pos, freq, seed);
+		total_elev += noise.x * amp;
+		total_gradient += noise.yzw * amp;
+		max_poss += amp;
+		amp *= persistence;
+		freq *= lacunarity;
+	}
+
+	float norm01 = total_elev / max_poss;
+	vec3 normalized_gradient = total_gradient / max_poss;
+	if (norm01 < 0.5) {
+		return vec4(
+			min_elevation * (1.0 - norm01 * 2.0),
+			normalized_gradient * (-2.0 * min_elevation));
+	}
+	return vec4(
+		max_elevation * ((norm01 - 0.5) * 2.0),
+		normalized_gradient * (2.0 * max_elevation));
+}
+
+)";
+
+code += R"(
+
 float eval_closed_analytic_height(uint face, float u_m, float v_m) {
 	canonicalize_face_uv(face, u_m, v_m, chart_half_extent_m);
 	float u_norm = u_m / chart_half_extent_m;
@@ -324,6 +395,89 @@ vec3 local_exp_chart_direction(vec3 root_direction, vec3 angular_tangent) {
 	return normalize(cos_angle * root_direction + sinc_angle * angular_tangent);
 }
 
+vec2 logical_chart_root_delta_m(float coord_u, float coord_v, vec2 plane_m) {
+	vec2 block_origin_m = vec2(coord_u, coord_v) * lod_block_size;
+	// Neighbouring blocks must reach a shared vertex through the same rounded
+	// presentation coordinate. V3 normals no longer depend on tiny offset probes,
+	// so there is no reason to trade that weld for subtraction precision here.
+	return (block_origin_m + plane_m) - multinet_bccm_v5_root_presentation_m;
+}
+
+void normalized_direction_jacobian(
+	vec3 raw_direction,
+	vec3 raw_u,
+	vec3 raw_v,
+	out vec3 direction,
+	out vec3 direction_u,
+	out vec3 direction_v
+) {
+	float raw_length = max(length(raw_direction), 0.0000001);
+	direction = raw_direction / raw_length;
+	direction_u = (raw_u - direction * dot(direction, raw_u)) / raw_length;
+	direction_v = (raw_v - direction * dot(direction, raw_v)) / raw_length;
+}
+
+void logical_chart_direction_jacobian(
+	vec2 root_delta_m,
+	bool uses_bounded_logical_chart,
+	out vec3 direction,
+	out vec3 direction_u,
+	out vec3 direction_v
+) {
+	vec3 tangent_u = multinet_bccm_v5_presentation_x_tangent;
+	vec3 tangent_v = multinet_bccm_v5_presentation_z_tangent;
+	vec3 angular_tangent = root_delta_m.x * tangent_u + root_delta_m.y * tangent_v;
+
+	if (uses_bounded_logical_chart) {
+		normalized_direction_jacobian(
+			multinet_bccm_v5_root_direction + angular_tangent,
+			tangent_u,
+			tangent_v,
+			direction,
+			direction_u,
+			direction_v);
+		return;
+	}
+
+	float q = dot(angular_tangent, angular_tangent);
+	float cosine;
+	float sinc;
+	float cosine_derivative_q;
+	float sinc_derivative_q;
+	if (q > 2.4674011) {
+		float angle = sqrt(q);
+		float sin_angle = sin(angle);
+		float cos_angle = cos(angle);
+		cosine = cos_angle;
+		sinc = sin_angle / angle;
+		cosine_derivative_q = -sin_angle / (2.0 * angle);
+		sinc_derivative_q = (angle * cos_angle - sin_angle) / (2.0 * angle * angle * angle);
+	} else {
+		float q2 = q * q;
+		float q3 = q2 * q;
+		float q4 = q2 * q2;
+		float q5 = q4 * q;
+		cosine = 1.0 - 0.5 * q + q2 / 24.0 - q3 / 720.0 + q4 / 40320.0 - q5 / 3628800.0;
+		sinc = 1.0 - q / 6.0 + q2 / 120.0 - q3 / 5040.0 + q4 / 362880.0 - q5 / 39916800.0;
+		cosine_derivative_q = -0.5 + q / 12.0 - q2 / 240.0 + q3 / 10080.0 - q4 / 725760.0;
+		sinc_derivative_q = -1.0 / 6.0 + q / 60.0 - q2 / 1680.0 + q3 / 90720.0 - q4 / 7983360.0;
+	}
+
+	float q_u = 2.0 * dot(angular_tangent, tangent_u);
+	float q_v = 2.0 * dot(angular_tangent, tangent_v);
+	vec3 raw_direction = cosine * multinet_bccm_v5_root_direction + sinc * angular_tangent;
+	vec3 raw_u = cosine_derivative_q * q_u * multinet_bccm_v5_root_direction +
+		sinc_derivative_q * q_u * angular_tangent + sinc * tangent_u;
+	vec3 raw_v = cosine_derivative_q * q_v * multinet_bccm_v5_root_direction +
+		sinc_derivative_q * q_v * angular_tangent + sinc * tangent_v;
+	normalized_direction_jacobian(
+		raw_direction, raw_u, raw_v, direction, direction_u, direction_v);
+}
+
+)";
+
+code += R"(
+
 vec3 eval_instance_closed_direction(
 	uint face,
 	float coord_u,
@@ -336,8 +490,7 @@ vec3 eval_instance_closed_direction(
 	vec2 plane_m
 ) {
 	if (uses_logical_chart) {
-		vec2 presentation_m = vec2(coord_u, coord_v) * lod_block_size + plane_m;
-		vec2 root_delta_m = presentation_m - multinet_bccm_v5_root_presentation_m;
+		vec2 root_delta_m = logical_chart_root_delta_m(coord_u, coord_v, plane_m);
 		vec3 angular_tangent =
 			root_delta_m.x * multinet_bccm_v5_presentation_x_tangent +
 			root_delta_m.y * multinet_bccm_v5_presentation_z_tangent;
@@ -371,8 +524,7 @@ float eval_instance_analytic_height(
 	vec2 plane_m
 ) {
 	if (uses_logical_chart && world_domain_topology != 0u) {
-		vec2 presentation_m = vec2(coord_u, coord_v) * lod_block_size + plane_m;
-		vec2 root_delta_m = presentation_m - multinet_bccm_v5_root_presentation_m;
+		vec2 root_delta_m = logical_chart_root_delta_m(coord_u, coord_v, plane_m);
 		vec3 angular_tangent =
 			root_delta_m.x * multinet_bccm_v5_presentation_x_tangent +
 			root_delta_m.y * multinet_bccm_v5_presentation_z_tangent;
@@ -402,6 +554,7 @@ void vertex() {
 	bool uses_coherent_unfolding = (r_bits & (1u << 10u)) != 0u;
 	bool uses_logical_chart = (r_bits & (1u << 11u)) != 0u;
 	bool uses_bounded_logical_chart = (r_bits & (1u << 12u)) != 0u;
+	bool uses_camera_relative_render = (r_bits & (1u << 16u)) != 0u;
 
 	uint g_bits = uint(round(INSTANCE_CUSTOM.g));
 	uint source_mode = g_bits & 3u;
@@ -456,15 +609,36 @@ void vertex() {
 	canonical_domain_uv_m = vec2(u_m, v_m);
 	uint color_face = (r_bits >> 13u) & 7u;
 	terrain_face = float(color_face);
-	terrain_direction = world_domain_topology != 0u
-		? eval_instance_closed_direction(
-			face, coord_u, coord_v, patch_orientation, uses_sample_patch,
-			uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart, plane_m)
-		: vec3(0.0);
+	bool uses_logical_analytic_gradient = world_domain_topology != 0u && uses_logical_chart;
+	vec3 logical_direction = vec3(0.0);
+	vec3 logical_direction_u = vec3(0.0);
+	vec3 logical_direction_v = vec3(0.0);
+	if (uses_logical_analytic_gradient) {
+		logical_chart_direction_jacobian(
+			logical_chart_root_delta_m(coord_u, coord_v, plane_m),
+			uses_bounded_logical_chart,
+			logical_direction,
+			logical_direction_u,
+			logical_direction_v);
+		terrain_direction = logical_direction;
+	} else {
+		terrain_direction = world_domain_topology != 0u
+			? eval_instance_closed_direction(
+				face, coord_u, coord_v, patch_orientation, uses_sample_patch,
+				uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart, plane_m)
+			: vec3(0.0);
+	}
 
-	float h_center = eval_instance_analytic_height(
-		face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding,
-		uses_logical_chart, uses_bounded_logical_chart, plane_m);
+	vec4 logical_height_gradient = uses_logical_analytic_gradient
+		? eval_closed_analytic_height_gradient_direction(terrain_direction)
+		: vec4(0.0);
+	// The analytic gradient already carries the exact centre height. Re-running
+	// all noise octaves here doubled the closed-world vertex cost for no result.
+	float h_center = uses_logical_analytic_gradient
+		? logical_height_gradient.x
+		: eval_instance_analytic_height(
+			face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding,
+			uses_logical_chart, uses_bounded_logical_chart, plane_m);
 
 	float final_y = h_center;
 	if (source_mode == 1u) {
@@ -489,25 +663,40 @@ void vertex() {
 	}
 	VERTEX.y = final_y;
 
-	// Analytic slope uses the fixed physical contract; page deltas use texel spacing.
-	float h_rt = eval_instance_analytic_height(
-		face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
-		plane_m + vec2(analytic_normal_sample_step_m, 0.0));
-	float h_lf = eval_instance_analytic_height(
-		face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
-		plane_m - vec2(analytic_normal_sample_step_m, 0.0));
-	float h_dn = eval_instance_analytic_height(
-		face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
-		plane_m + vec2(0.0, analytic_normal_sample_step_m));
-	float h_up = eval_instance_analytic_height(
-		face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
-		plane_m - vec2(0.0, analytic_normal_sample_step_m));
-	float analytic_slope_u = world_domain_topology == 0u
-		? finite_axis_slope(h_center, h_rt, h_lf, u_m, finite_half_extent_x_m, analytic_normal_sample_step_m)
-		: (h_rt - h_lf) / (2.0 * analytic_normal_sample_step_m);
-	float analytic_slope_v = world_domain_topology == 0u
-		? finite_axis_slope(h_center, h_dn, h_up, v_m, finite_half_extent_z_m, analytic_normal_sample_step_m)
-		: (h_dn - h_up) / (2.0 * analytic_normal_sample_step_m);
+	// The logical closed chart has an exact derivative. Its former half-metre
+	// direction probes fall below FP32 angular precision at Earth radius.
+	float h_rt = h_center;
+	float h_lf = h_center;
+	float h_dn = h_center;
+	float h_up = h_center;
+	float analytic_slope_u;
+	float analytic_slope_v;
+	if (uses_logical_analytic_gradient) {
+		vec3 physical_gradient = logical_height_gradient.yzw;
+		analytic_slope_u = dot(
+			physical_gradient, logical_area_radius_m * logical_direction_u);
+		analytic_slope_v = dot(
+			physical_gradient, logical_area_radius_m * logical_direction_v);
+	} else {
+		h_rt = eval_instance_analytic_height(
+			face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
+			plane_m + vec2(analytic_normal_sample_step_m, 0.0));
+		h_lf = eval_instance_analytic_height(
+			face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
+			plane_m - vec2(analytic_normal_sample_step_m, 0.0));
+		h_dn = eval_instance_analytic_height(
+			face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
+			plane_m + vec2(0.0, analytic_normal_sample_step_m));
+		h_up = eval_instance_analytic_height(
+			face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
+			plane_m - vec2(0.0, analytic_normal_sample_step_m));
+		analytic_slope_u = world_domain_topology == 0u
+			? finite_axis_slope(h_center, h_rt, h_lf, u_m, finite_half_extent_x_m, analytic_normal_sample_step_m)
+			: (h_rt - h_lf) / (2.0 * analytic_normal_sample_step_m);
+		analytic_slope_v = world_domain_topology == 0u
+			? finite_axis_slope(h_center, h_dn, h_up, v_m, finite_half_extent_z_m, analytic_normal_sample_step_m)
+			: (h_dn - h_up) / (2.0 * analytic_normal_sample_step_m);
+	}
 
 	if (source_mode == 1u) {
 		if (gpu_layer > 0u) {
@@ -541,6 +730,13 @@ void vertex() {
 	vec3 dv = vec3(0.0, analytic_slope_v, 1.0);
 
 	NORMAL = normalize(cross(dv, du));
+	if (uses_camera_relative_render) {
+		// MODEL_MATRIX contains the small observer-relative MultiMesh transform.
+		// Strip the editor camera translation from the view matrix before Godot's
+		// normal post-vertex transform so rotation never subtracts huge floats.
+		MODELVIEW_MATRIX = mat4(mat3(VIEW_MATRIX)) * MODEL_MATRIX;
+		MODELVIEW_NORMAL_MATRIX = mat3(VIEW_MATRIX) * MODEL_NORMAL_MATRIX;
+	}
 }
 
 void fragment() {
@@ -552,9 +748,9 @@ void fragment() {
 		// Classify the same canonical direction used for height evaluation. This
 		// keeps the color seam on the actual cube-face boundary instead of on the
 		// canonical owner block that happened to supply the page.
-		uint face_index = length(terrain_direction) > 0.0
-			? face_from_direction(normalize(terrain_direction))
-			: uint(clamp(floor(terrain_face + 0.5), 0.0, 5.0));
+		// Dominant-axis classification is scale invariant. Normalizing this varying
+		// per pixel burned a square root across the entire filled viewport.
+		uint face_index = face_from_direction(terrain_direction);
 		if (face_index == 0u) base_color = face_color_0;
 		else if (face_index == 1u) base_color = face_color_1;
 		else if (face_index == 2u) base_color = face_color_2;

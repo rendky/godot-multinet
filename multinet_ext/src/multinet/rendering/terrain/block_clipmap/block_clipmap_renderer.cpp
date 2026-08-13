@@ -29,21 +29,28 @@ constexpr const char* V5_ROOT_PRESENTATION_GLOBAL = "multinet_bccm_v5_root_prese
 constexpr const char* V5_ROOT_DIRECTION_GLOBAL = "multinet_bccm_v5_root_direction";
 constexpr const char* V5_X_TANGENT_GLOBAL = "multinet_bccm_v5_presentation_x_tangent";
 constexpr const char* V5_Z_TANGENT_GLOBAL = "multinet_bccm_v5_presentation_z_tangent";
+uint32_t v5_chart_global_owner_count = 0;
 
-void register_v5_chart_globals(godot::RenderingServer* rs) {
+void acquire_v5_chart_globals(godot::RenderingServer* rs) {
 	if (!rs) return;
-	const auto add_if_missing = [&](const char* name,
-		godot::RenderingServer::GlobalShaderParameterType type,
-		const godot::Variant& fallback) {
-		const godot::StringName global_name(name);
-		if (rs->global_shader_parameter_get_type(global_name) == godot::RenderingServer::GLOBAL_VAR_TYPE_MAX) {
-			rs->global_shader_parameter_add(global_name, type, fallback);
-		}
-	};
-	add_if_missing(V5_ROOT_PRESENTATION_GLOBAL, godot::RenderingServer::GLOBAL_VAR_TYPE_VEC2, godot::Vector2());
-	add_if_missing(V5_ROOT_DIRECTION_GLOBAL, godot::RenderingServer::GLOBAL_VAR_TYPE_VEC3, godot::Vector3(1.0f, 0.0f, 0.0f));
-	add_if_missing(V5_X_TANGENT_GLOBAL, godot::RenderingServer::GLOBAL_VAR_TYPE_VEC3, godot::Vector3());
-	add_if_missing(V5_Z_TANGENT_GLOBAL, godot::RenderingServer::GLOBAL_VAR_TYPE_VEC3, godot::Vector3());
+	if (v5_chart_global_owner_count++ != 0) return;
+	rs->global_shader_parameter_add(V5_ROOT_PRESENTATION_GLOBAL,
+		godot::RenderingServer::GLOBAL_VAR_TYPE_VEC2, godot::Vector2());
+	rs->global_shader_parameter_add(V5_ROOT_DIRECTION_GLOBAL,
+		godot::RenderingServer::GLOBAL_VAR_TYPE_VEC3, godot::Vector3(1.0f, 0.0f, 0.0f));
+	rs->global_shader_parameter_add(V5_X_TANGENT_GLOBAL,
+		godot::RenderingServer::GLOBAL_VAR_TYPE_VEC3, godot::Vector3());
+	rs->global_shader_parameter_add(V5_Z_TANGENT_GLOBAL,
+		godot::RenderingServer::GLOBAL_VAR_TYPE_VEC3, godot::Vector3());
+}
+
+void release_v5_chart_globals(godot::RenderingServer* rs) {
+	if (v5_chart_global_owner_count == 0) return;
+	if (--v5_chart_global_owner_count != 0 || !rs) return;
+	rs->global_shader_parameter_remove(V5_ROOT_PRESENTATION_GLOBAL);
+	rs->global_shader_parameter_remove(V5_ROOT_DIRECTION_GLOBAL);
+	rs->global_shader_parameter_remove(V5_X_TANGENT_GLOBAL);
+	rs->global_shader_parameter_remove(V5_Z_TANGENT_GLOBAL);
 }
 
 void set_v5_chart_globals(
@@ -383,7 +390,8 @@ bool BlockClipmapRenderer::initialize(
 		cleanup();
 		return false;
 	}
-	register_v5_chart_globals(rs);
+	acquire_v5_chart_globals(rs);
+	has_v5_chart_global_lease_ = true;
 
 	shader_data = create_bccm_shader_material();
 	if (!shader_data.shader_rid.is_valid() || !shader_data.material_rid.is_valid()) {
@@ -672,6 +680,10 @@ void BlockClipmapRenderer::cleanup() {
 		rs->free_rid(shader_data.shader_rid);
 		shader_data.shader_rid = godot::RID();
 	}
+	if (has_v5_chart_global_lease_) {
+		release_v5_chart_globals(rs);
+		has_v5_chart_global_lease_ = false;
+	}
 	#endif
 	is_initialized = false;
 	active_domain = Multinet::WorldDomainManifest{};
@@ -679,6 +691,7 @@ void BlockClipmapRenderer::cleanup() {
 	has_active_presentation_binding = false;
 	active_presentation_basis = godot::Basis();
 	active_presentation_origin = godot::Vector3();
+	active_view_world_position = godot::Vector3();
 	bound_logical_chart_root_ = TerrainSamplePatchKey{};
 	bound_logical_chart_root_presentation_x_m_ = 0.0;
 	bound_logical_chart_root_presentation_z_m_ = 0.0;
@@ -777,6 +790,7 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 	has_active_presentation_binding = cam_state.has_presentation_binding;
 	active_presentation_basis = cam_state.presentation_basis;
 	active_presentation_origin = cam_state.presentation_origin;
+	active_view_world_position = cam_pos;
 
 	render_frame_id++;
 
@@ -1078,6 +1092,9 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 				place.block_to_active_frame, godot::Vector3(0, 0, 0)
 			).xform(place.local_aabb);
 			global_aabb.position += place.local_origin;
+			if (closed_presentation && has_active_presentation_binding) {
+				global_aabb.position += active_view_world_position;
+			}
 			bool is_visible = frustum.intersects_aabb(global_aabb);
 
 			uint8_t edge_mask = 0;
@@ -1777,9 +1794,11 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 			uint32_t coherent_bit = uses_coherent_unfolding ? (1u << 10u) : 0u;
 			uint32_t logical_chart_bit = uses_logical_chart ? (1u << 11u) : 0u;
 			uint32_t bounded_logical_chart_bit = uses_bounded_logical_chart ? (1u << 12u) : 0u;
+			uint32_t camera_relative_render_bit =
+				closed_presentation && has_active_presentation_binding ? (1u << 16u) : 0u;
 			float r_packed = static_cast<float>(
 				face_bits | color_face_bits | edge_bits | orientation_bits | patch_bit | coherent_bit |
-				logical_chart_bit | bounded_logical_chart_bit);
+				logical_chart_bit | bounded_logical_chart_bit | camera_relative_render_bit);
 
 			uint32_t mode_bits = static_cast<uint32_t>(source_mode) & 0x3u;
 			uint32_t layer_bits = (static_cast<uint32_t>(inst.gpu_layer) & 0x7Fu) << 2u;
@@ -2247,7 +2266,11 @@ BlockPlacement BlockClipmapRenderer::build_presentation_block_placement(
 	godot::Vector3 local_origin(static_cast<float>(min_x), 0.0f, static_cast<float>(min_z));
 	if (has_active_presentation_binding) {
 		block_basis = active_presentation_basis * block_basis;
-		local_origin = active_presentation_origin + active_presentation_basis.xform(local_origin);
+		// Closed editor rendering must stay camera-relative all the way into the
+		// vertex transform. Reintroducing huge world coordinates here makes the
+		// single-precision view matrix round every tile separately.
+		local_origin = (active_presentation_origin - active_view_world_position) +
+			active_presentation_basis.xform(local_origin);
 	}
 	return BlockPlacement{ block_basis, local_origin, aabb, true };
 }

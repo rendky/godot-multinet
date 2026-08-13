@@ -20,6 +20,7 @@ constexpr uint32_t TOPOLOGY_VERSION_FINITE_RECTANGLE_V1 = 1;
 constexpr uint32_t PROJECTION_VERSION_NONE = 0;
 constexpr float CANONICAL_ANALYTIC_NORMAL_SAMPLE_STEP_M = 0.5f;
 constexpr uint32_t BCCM_ANALYTIC_NORMAL_VERSION_2 = 2;
+constexpr uint32_t BCCM_ANALYTIC_NORMAL_VERSION_3 = 3;
 
 struct WorldScaleInput {
 	uint64_t area_equivalent_side_m{ 5000000 };

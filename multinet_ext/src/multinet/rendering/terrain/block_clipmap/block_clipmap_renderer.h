@@ -471,6 +471,7 @@ private:
 	// transforms pass through the same presentation transform.
 	godot::Basis active_presentation_basis{};
 	godot::Vector3 active_presentation_origin{};
+	godot::Vector3 active_view_world_position{};
 	bool has_active_presentation_binding{ false };
 	TerrainSamplePatchKey bound_logical_chart_root_{};
 	double bound_logical_chart_root_presentation_x_m_{ 0.0 };
@@ -544,6 +545,7 @@ private:
 
 	RenderID scenario_rid;
 	bool is_initialized{ false };
+	bool has_v5_chart_global_lease_{ false };
 
 	// Retained for change-detection diagnostics only.
 	Multinet::TerrainRenderSourceSnapshot last_snapshot;
