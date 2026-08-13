@@ -100,6 +100,137 @@ inline bool try_build_logical_sample_chart(
 	return true;
 }
 
+// The V5 chart lives in one presentation plane, so its tangent axes must not
+// be rebuilt from a cube-face alias after a corner crossing. Carry them by the
+// shortest rotation between neighbouring canonical directions instead. Face
+// ownership can change at a cube vertex; the local terrain chart must not.
+inline bool try_transport_logical_sample_chart(
+	const LogicalSampleChart& source,
+	const Multinet::SurfaceFrame& destination_root,
+	const Multinet::WorldDomainManifest& domain,
+	LogicalSampleChart& out
+) noexcept {
+	if (!destination_root.origin.is_valid() || !domain.is_valid() || domain.is_finite()) return false;
+	const double half_extent_m = static_cast<double>(domain.closed_surface.chart_half_extent_mm) * 0.001;
+	if (!(half_extent_m > 0.0) || !std::isfinite(half_extent_m)) return false;
+	const Multinet::FramePosition64 target_raw = Multinet::ProjectionCOBE::map_forward(
+		static_cast<int>(destination_root.origin.face),
+		destination_root.origin.u_m / half_extent_m,
+		destination_root.origin.v_m / half_extent_m);
+	const auto length = [](const Multinet::FramePosition64& value) noexcept {
+		return std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
+	};
+	const auto dot = [](const Multinet::FramePosition64& a, const Multinet::FramePosition64& b) noexcept {
+		return a.x * b.x + a.y * b.y + a.z * b.z;
+	};
+	const auto cross = [](const Multinet::FramePosition64& a, const Multinet::FramePosition64& b) noexcept {
+		return Multinet::FramePosition64{
+			a.y * b.z - a.z * b.y,
+			a.z * b.x - a.x * b.z,
+			a.x * b.y - a.y * b.x
+		};
+	};
+	const double source_length = length(source.root_direction);
+	const double target_length = length(target_raw);
+	if (!(source_length > 0.0) || !(target_length > 0.0) ||
+		!std::isfinite(source_length) || !std::isfinite(target_length)) return false;
+	const Multinet::FramePosition64 from{
+		source.root_direction.x / source_length,
+		source.root_direction.y / source_length,
+		source.root_direction.z / source_length
+	};
+	const Multinet::FramePosition64 to{
+		target_raw.x / target_length,
+		target_raw.y / target_length,
+		target_raw.z / target_length
+	};
+	const Multinet::FramePosition64 axis = cross(from, to);
+	const double axis_sq = dot(axis, axis);
+	const double cosine = std::clamp(dot(from, to), -1.0, 1.0);
+	if (!std::isfinite(axis_sq) || !std::isfinite(cosine) || cosine < -0.999999) return false;
+	const auto rotate = [&](const Multinet::FramePosition64& value) noexcept {
+		if (axis_sq <= 1e-24) return value;
+		const Multinet::FramePosition64 first = cross(axis, value);
+		const Multinet::FramePosition64 second = cross(axis, first);
+		const double scale = (1.0 - cosine) / axis_sq;
+		return Multinet::FramePosition64{
+			value.x + first.x + second.x * scale,
+			value.y + first.y + second.y * scale,
+			value.z + first.z + second.z * scale
+		};
+	};
+
+	LogicalSampleChart transported{};
+	transported.root_direction = to;
+	transported.presentation_x_angular_tangent = rotate(source.presentation_x_angular_tangent);
+	transported.presentation_z_angular_tangent = rotate(source.presentation_z_angular_tangent);
+	if (!(length(transported.presentation_x_angular_tangent) > 0.0) ||
+		!(length(transported.presentation_z_angular_tangent) > 0.0)) return false;
+	out = transported;
+	return true;
+}
+
+// Converts a flat presentation-plane input vector into the current canonical
+// face's U/V delta using the same continuous V5 chart as terrain rendering.
+// Navigation must not take its heading from a cube-face alias after rendering
+// has deliberately stopped doing so.
+inline bool try_map_logical_chart_delta_to_face_delta(
+	const LogicalSampleChart& chart,
+	const Multinet::SurfacePosition64& current_position,
+	const Multinet::WorldDomainManifest& domain,
+	double presentation_dx_m,
+	double presentation_dz_m,
+	Multinet::FramePosition64& out
+) noexcept {
+	if (!current_position.is_valid() || !domain.is_valid() || domain.is_finite() ||
+		!std::isfinite(presentation_dx_m) || !std::isfinite(presentation_dz_m)) return false;
+	const double half_extent_m = static_cast<double>(domain.closed_surface.chart_half_extent_mm) * 0.001;
+	if (!(half_extent_m > 0.0) || !std::isfinite(half_extent_m)) return false;
+	Multinet::FramePosition64 face_du{};
+	Multinet::FramePosition64 face_dv{};
+	if (!Multinet::ProjectionCOBE::map_forward_differential(
+		static_cast<int>(current_position.face),
+		current_position.u_m / half_extent_m,
+		current_position.v_m / half_extent_m,
+		face_du, face_dv)) return false;
+	face_du.x /= half_extent_m;
+	face_du.y /= half_extent_m;
+	face_du.z /= half_extent_m;
+	face_dv.x /= half_extent_m;
+	face_dv.y /= half_extent_m;
+	face_dv.z /= half_extent_m;
+	const auto dot = [](const Multinet::FramePosition64& a, const Multinet::FramePosition64& b) noexcept {
+		return a.x * b.x + a.y * b.y + a.z * b.z;
+	};
+	const Multinet::FramePosition64 desired{
+		presentation_dx_m * chart.presentation_x_angular_tangent.x +
+			presentation_dz_m * chart.presentation_z_angular_tangent.x,
+		presentation_dx_m * chart.presentation_x_angular_tangent.y +
+			presentation_dz_m * chart.presentation_z_angular_tangent.y,
+		presentation_dx_m * chart.presentation_x_angular_tangent.z +
+			presentation_dz_m * chart.presentation_z_angular_tangent.z
+	};
+	const double uu = dot(face_du, face_du);
+	const double uv = dot(face_du, face_dv);
+	const double vv = dot(face_dv, face_dv);
+	const double determinant = uu * vv - uv * uv;
+	// face_du/dv are expressed per metre. Their determinant therefore shrinks
+	// with the fourth power of the world's linear scale. An absolute cutoff
+	// rejects healthy charts at planet-sized sides, most visibly at three-face
+	// junctions. Check conditioning instead of raw magnitude.
+	const double metric_scale = uu * vv;
+	if (!(uu > 0.0) || !(vv > 0.0) || !(metric_scale > 0.0) ||
+		!std::isfinite(metric_scale) || !std::isfinite(determinant) ||
+		!(determinant > metric_scale * 1e-12)) return false;
+	const double rhs_u = dot(face_du, desired);
+	const double rhs_v = dot(face_dv, desired);
+	const double face_delta_u_m = (rhs_u * vv - rhs_v * uv) / determinant;
+	const double face_delta_v_m = (rhs_v * uu - rhs_u * uv) / determinant;
+	if (!std::isfinite(face_delta_u_m) || !std::isfinite(face_delta_v_m)) return false;
+	out = { face_delta_u_m, 0.0, face_delta_v_m };
+	return true;
+}
+
 inline bool try_sample_logical_chart(
 	const LogicalSampleChart& chart,
 	double presentation_dx_m,

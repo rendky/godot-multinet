@@ -46,6 +46,59 @@ FramePosition64 map_forward(int face, double u, double v) noexcept {
     return p;
 }
 
+bool map_forward_differential(
+    int face,
+    double u,
+    double v,
+    FramePosition64& out_du,
+    FramePosition64& out_dv
+) noexcept {
+    if (face < 0 || face >= 6 || !std::isfinite(u) || !std::isfinite(v)) return false;
+
+    const double X = f_forward(u, v);
+    const double Z = f_forward(v, u);
+    const FramePosition64 q = {
+        FACES[face].u.x * X + FACES[face].v.x * Z + FACES[face].n.x,
+        FACES[face].u.y * X + FACES[face].v.y * Z + FACES[face].n.y,
+        FACES[face].u.z * X + FACES[face].v.z * Z + FACES[face].n.z
+    };
+    const double q_length = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z);
+    if (!(q_length > 0.0) || !std::isfinite(q_length)) return false;
+    const FramePosition64 p = { q.x / q_length, q.y / q_length, q.z / q_length };
+
+    double dX_du = 0.0;
+    double dX_dv = 0.0;
+    double dZ_dv = 0.0;
+    double dZ_du = 0.0;
+    df_forward(u, v, dX_du, dX_dv);
+    df_forward(v, u, dZ_dv, dZ_du);
+
+    const FramePosition64 dq_du = {
+        FACES[face].u.x * dX_du + FACES[face].v.x * dZ_du,
+        FACES[face].u.y * dX_du + FACES[face].v.y * dZ_du,
+        FACES[face].u.z * dX_du + FACES[face].v.z * dZ_du
+    };
+    const FramePosition64 dq_dv = {
+        FACES[face].u.x * dX_dv + FACES[face].v.x * dZ_dv,
+        FACES[face].u.y * dX_dv + FACES[face].v.y * dZ_dv,
+        FACES[face].u.z * dX_dv + FACES[face].v.z * dZ_dv
+    };
+    const double radial_du = p.x * dq_du.x + p.y * dq_du.y + p.z * dq_du.z;
+    const double radial_dv = p.x * dq_dv.x + p.y * dq_dv.y + p.z * dq_dv.z;
+    out_du = {
+        (dq_du.x - p.x * radial_du) / q_length,
+        (dq_du.y - p.y * radial_du) / q_length,
+        (dq_du.z - p.z * radial_du) / q_length
+    };
+    out_dv = {
+        (dq_dv.x - p.x * radial_dv) / q_length,
+        (dq_dv.y - p.y * radial_dv) / q_length,
+        (dq_dv.z - p.z * radial_dv) / q_length
+    };
+    return std::isfinite(out_du.x) && std::isfinite(out_du.y) && std::isfinite(out_du.z) &&
+        std::isfinite(out_dv.x) && std::isfinite(out_dv.y) && std::isfinite(out_dv.z);
+}
+
 bool map_inverse(const FramePosition64& p, int expected_canonical_face, double& out_u, double& out_v, int& out_face) noexcept {
     int best_face = 0;
     double max_dot = -2.0;

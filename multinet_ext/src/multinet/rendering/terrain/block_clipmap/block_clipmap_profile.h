@@ -21,6 +21,12 @@ struct BlockClipmapProfile {
 
 	static constexpr uint32_t MAX_CANDIDATES = 256;
 	static constexpr uint32_t MAX_VISIBLE_INSTANCES = 256;
+	// The finest level has no hole, so its full square must fit the instance
+	// buffers. Raising this means resizing the renderer buffers as one change.
+	static constexpr int32_t MAX_SUPPORTED_CANDIDATE_GRID_RADIUS = 8;
+	static_assert((2 * MAX_SUPPORTED_CANDIDATE_GRID_RADIUS) *
+		(2 * MAX_SUPPORTED_CANDIDATE_GRID_RADIUS) == MAX_CANDIDATES,
+		"candidate radius limit must match the instance capacity");
 	static constexpr uint8_t MAX_LEVELS = 16; // hard limit for array allocation
 	static constexpr uint32_t MAX_GRID_OFFSETS = 1024; // (2*16)^2 — worst-case grid radius 16
 
@@ -34,6 +40,14 @@ struct BlockClipmapProfile {
 	float get_lod_block_size(uint8_t lod) const {
 		return lod0_block_size * static_cast<float>(1 << lod);
 	}
+};
+
+struct BlockClipmapLimits {
+	size_t max_source_requests{ 64 };
+	size_t max_page_commits{ 24 };
+	static constexpr size_t MAX_SOURCE_REQUESTS = 64;
+	static constexpr size_t MAX_PAGE_COMMITS = 24;
+	static constexpr size_t MAX_FRAME_DEMAND = 512;
 };
 
 } // namespace multinet::rendering

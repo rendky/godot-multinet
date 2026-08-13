@@ -4,6 +4,12 @@ project(multinet_ext LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Full-debug MSVC links can deadlock through the shared symbol service when
+# Ninja starts several of them together. Keep compilation parallel and admit
+# one linker at a time.
+set_property(GLOBAL PROPERTY JOB_POOLS multinet_link_pool=1)
+set(CMAKE_JOB_POOL_LINK multinet_link_pool)
+
 # Configure godot-cpp
 set(GODOTCPP_CUSTOM_API_FILE "${CMAKE_CURRENT_SOURCE_DIR}/api/extension_api.json" CACHE FILEPATH "Path to custom extension_api.json")
 set(GODOTCPP_TARGET "editor" CACHE STRING "Godot build target")
@@ -41,3 +47,8 @@ add_executable(bccm_surface_edge_fixture src/tests/bccm_surface_edge_fixture.cpp
 target_compile_definitions(bccm_surface_edge_fixture PRIVATE MULTINET_TEST DEBUG_ENABLED)
 target_link_libraries(bccm_surface_edge_fixture PRIVATE godot::cpp)
 
+foreach(WP6_FIXTURE world_domain_fixture editor_domain_navigation_fixture bccm_flat_normal_fixture canonicalization_fixture)
+    add_executable(${WP6_FIXTURE} src/tests/${WP6_FIXTURE}.cpp ${CORE_SOURCES})
+    target_compile_definitions(${WP6_FIXTURE} PRIVATE MULTINET_TEST DEBUG_ENABLED)
+    target_link_libraries(${WP6_FIXTURE} PRIVATE godot::cpp)
+endforeach()

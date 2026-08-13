@@ -22,6 +22,16 @@ namespace ProjectionCOBE {
     // Forward conversion: face index (0-5) and U,V in [-1, 1] to normalized 3D sphere coordinate.
     FramePosition64 map_forward(int face, double u, double v) noexcept;
 
+    // Differential of map_forward with respect to normalized face U and V.
+    // This is presentation support, not a second projection authority.
+    bool map_forward_differential(
+        int face,
+        double u,
+        double v,
+        FramePosition64& out_du,
+        FramePosition64& out_dv
+    ) noexcept;
+
     // Validated inverse conversion: 3D sphere coordinate to canonical face and U,V.
     // Returns true if converged within tolerances.
     bool map_inverse(const FramePosition64& p, int expected_canonical_face, double& out_u, double& out_v, int& out_face) noexcept;

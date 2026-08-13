@@ -134,6 +134,16 @@ constexpr uint32_t TERRAIN_RECIPE_HASH_VERSION = 1;
 	return recipe.identity.recipe_hash != 0;
 }
 
+[[nodiscard]] inline bool finalize_terrain_recipe(TerrainRecipe& recipe, const WorldDomainManifest& domain) noexcept {
+	if (!domain.is_valid()) return false;
+	recipe.identity.topology_version = domain.topology_version;
+	recipe.identity.projection_version = domain.projection_version;
+	recipe.identity.manifest_hash = domain.domain_manifest_hash;
+	recipe.identity.deterministic_algorithm_id = 0x53513502u; // SquirrelNoise5U3V1
+	recipe.identity.recipe_hash = compute_terrain_recipe_hash(recipe);
+	return recipe.identity.recipe_hash != 0;
+}
+
 [[nodiscard]] inline bool validate_terrain_recipe(const TerrainRecipe& recipe, const WorldScaleManifest& scale) noexcept {
 	if (!scale.is_valid()) return false;
 	if (recipe.identity.topology_version != scale.topology_version) return false;
@@ -144,6 +154,16 @@ constexpr uint32_t TERRAIN_RECIPE_HASH_VERSION = 1;
 	
 	uint64_t expected_hash = compute_terrain_recipe_hash(recipe);
 	return recipe.identity.recipe_hash == expected_hash;
+}
+
+[[nodiscard]] inline bool validate_terrain_recipe(const TerrainRecipe& recipe, const WorldDomainManifest& domain) noexcept {
+	if (!domain.is_valid()) return false;
+	if (recipe.identity.topology_version != domain.topology_version) return false;
+	if (recipe.identity.projection_version != domain.projection_version) return false;
+	if (recipe.identity.manifest_hash != domain.domain_manifest_hash) return false;
+	if (recipe.identity.deterministic_algorithm_id != 0x53513502u) return false;
+	if (recipe.identity.recipe_hash == 0) return false;
+	return recipe.identity.recipe_hash == compute_terrain_recipe_hash(recipe);
 }
 
 } // namespace Multinet

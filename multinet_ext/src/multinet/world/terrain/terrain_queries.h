@@ -6,6 +6,7 @@
 #include "multinet/core/memory/arena_allocator.h"
 #include "multinet/world/terrain/heightfield_generator.h"
 #include "multinet/world/terrain/canonical_terrain_signal.h"
+#include "multinet/world/terrain/finite_canonical_terrain_signal.h"
 
 #include "multinet/core/spatial/surface_projection.h"
 #include "multinet/core/spatial/surface_address.h"
@@ -41,10 +42,13 @@ struct TerrainHeightEvaluation {
 class TerrainFieldEvaluator {
 private:
 	CanonicalTerrainSignalV1 canonical_generator;
+	FiniteCanonicalTerrainSignalV1 finite_generator;
 	LegacyPlanarTerrainSignalV1 legacy_generator;
 	WorldScaleManifest scale;
+	WorldDomainManifest domain;
 	uint32_t current_version{ 1 };
 	bool is_legacy{ false };
+	bool is_finite{ false };
 
 public:
 	TerrainFieldEvaluator() = default;
@@ -63,9 +67,22 @@ public:
 	explicit TerrainFieldEvaluator(const LegacyPlanarTerrainSignalV1 &p_generator, const WorldScaleManifest &p_scale, uint32_t p_version = 1)
 		: legacy_generator(p_generator), scale(p_scale), current_version(p_version), is_legacy(true) {}
 
+	explicit TerrainFieldEvaluator(const FiniteCanonicalTerrainSignalV1 &p_generator, const WorldDomainManifest &p_domain, uint32_t p_version = 1)
+		: finite_generator(p_generator), domain(p_domain), current_version(p_version), is_legacy(false), is_finite(true) {
+		if (!domain.is_valid() || !domain.is_finite()) throw std::invalid_argument("Invalid finite domain");
+		const auto& identity = finite_generator.get_recipe().identity;
+		if (identity.topology_version != domain.topology_version ||
+			identity.projection_version != domain.projection_version ||
+			identity.manifest_hash != domain.domain_manifest_hash) {
+			throw std::invalid_argument("Finite terrain recipe identity mismatch");
+		}
+	}
+
 	[[nodiscard]] double evaluate_height_canonical(SurfacePosition64 position) const noexcept {
 		if (is_legacy) {
 			return legacy_generator.evaluate_height(position.u_m, position.v_m);
+		} else if (is_finite) {
+			return finite_generator.evaluate_height(position.u_m, position.v_m);
 		} else {
 			return canonical_generator.evaluate_height(position);
 		}
@@ -81,7 +98,14 @@ public:
 		if (!position.is_valid()) return result;
 		if (!std::isfinite(position.u_m) || !std::isfinite(position.v_m) || !std::isfinite(position.altitude_m)) return result;
 		
-		if (!is_legacy) {
+		if (is_finite) {
+			if (position.face != SurfaceFace::PositiveX ||
+				position.topology_version != domain.topology_version ||
+				position.projection_version != domain.projection_version) return result;
+			const double hx = static_cast<double>(domain.finite.half_extent_x_mm) * 0.001;
+			const double hz = static_cast<double>(domain.finite.half_extent_z_mm) * 0.001;
+			if (position.u_m < -hx || position.u_m > hx || position.v_m < -hz || position.v_m > hz) return result;
+		} else if (!is_legacy) {
 			if (position.topology_version != scale.topology_version || position.projection_version != scale.projection_version) return result;
 			
 			SurfaceAddress addr;
@@ -100,6 +124,10 @@ public:
 		
 		if (flags & TerrainQueryFlags::Normals) {
 			double step = 0.5; // 500mm sample step
+			if (is_finite) {
+				result.normal = finite_generator.evaluate_normal(position.u_m, position.v_m, step);
+				return result;
+			}
 			
 			SurfacePosition64 pos_u_pos = position; pos_u_pos.u_m += step;
 			SurfacePosition64 pos_u_neg = position; pos_u_neg.u_m -= step;

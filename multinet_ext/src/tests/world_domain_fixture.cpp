@@ -125,6 +125,26 @@ int main() {
 	closed_100_input.closed_surface.area_equivalent_side_m = 100000;
 	const WorldDomainManifest closed_100 = build_world_domain_manifest(closed_100_input);
 	require(closed_100.is_valid(), "100 km wrapping fixture manifest invalid");
+	// The closed flat-view coverage control is deliberately bounded by the
+	// preallocated 256-instance finest-level buffer. These are coverage choices,
+	// not a claim that one planar chart can represent the whole closed surface.
+	for (const int32_t radius : { 4, 6, 8 }) {
+		auto coverage_renderer = std::make_unique<BlockClipmapRenderer>();
+		require(coverage_renderer->set_candidate_grid_radius(radius),
+			"supported closed flat coverage radius rejected");
+		const uint8_t levels = derive_flat_presentation_bccm_level_count(closed_100, 32.0, radius, 8);
+		require(levels == 6, "100 km coverage radius changed the guarded flat LOD prefix");
+		coverage_renderer->test_set_profile_levels(levels);
+		const double expected_extent_m = static_cast<double>(radius) * 2.0 * 1024.0;
+		require(std::abs(coverage_renderer->get_effective_coverage_extent_m() - expected_extent_m) < 1e-9,
+			"closed flat coverage extent mismatch");
+		const double expected_corner_m = (static_cast<double>(radius) + 1.0) * 1024.0 * 1.41421356237309504880;
+		require(std::abs(coverage_renderer->get_effective_coverage_corner_radius_m() - expected_corner_m) < 1e-9,
+			"closed flat coverage corner radius mismatch");
+	}
+	auto rejected_coverage_renderer = std::make_unique<BlockClipmapRenderer>();
+	require(!rejected_coverage_renderer->set_candidate_grid_radius(9),
+		"coverage radius exceeded the fixed 256-instance capacity");
 	const double h100 = static_cast<double>(closed_100.closed_surface.chart_half_extent_mm) * 0.001;
 	SurfaceFrame observer_100{};
 	require(try_make_flat_surface_frame_for_face(SurfaceFace::PositiveX, observer_100),
@@ -577,16 +597,243 @@ int main() {
 	require(logical_chart_adjacent_gap_m <= logical_chart_step_bound_m + 0.1,
 		"logical-sphere chart contains a discontinuous canonical sample jump");
 
+	// A diagonal step across a cube vertex changes two face aliases at once.
+	// The chart axes must follow the physical direction by a tiny rotation, not
+	// inherit the discrete signed-permutation selected by edge canonicalization.
+	const double corner_extent_m = static_cast<double>(closed_100.closed_surface.chart_half_extent_mm) * 0.001;
+	SurfaceFrame corner_before{};
+	require(try_make_flat_surface_frame_for_face(SurfaceFace::PositiveX, corner_before),
+		"corner chart source frame unavailable");
+	corner_before.origin.face = SurfaceFace::PositiveX;
+	corner_before.origin.u_m = corner_extent_m - 0.5;
+	corner_before.origin.v_m = corner_extent_m - 0.5;
+	corner_before.origin.altitude_m = 0.0;
+	corner_before.origin.topology_version = closed_100.topology_version;
+	corner_before.origin.projection_version = closed_100.projection_version;
+	corner_before.topology_version = closed_100.topology_version;
+	corner_before.projection_version = closed_100.projection_version;
+	LogicalSampleChart corner_chart_before{};
+	require(try_build_logical_sample_chart(corner_before, closed_100, corner_chart_before),
+		"corner chart source construction failed");
+	// A held presentation-plane direction must advance the observer along the
+	// same V5 direction that the visible mesh samples. This is intentionally not
+	// the transported cube-frame delta used by the old control path.
+	FramePosition64 v5_corner_delta{};
+	require(try_map_logical_chart_delta_to_face_delta(
+		corner_chart_before, corner_before.origin, closed_100, 1.0, 1.0, v5_corner_delta),
+		"corner V5 presentation delta could not map to face motion");
+	SurfaceFrame v5_corner_after{};
+	SurfacePosition64 v5_corner_position{};
+	uint32_t v5_corner_crossings = 0;
+	require(try_advance_domain_surface_frame(
+		v5_corner_delta, closed_100, corner_before,
+		v5_corner_after, v5_corner_position, v5_corner_crossings),
+		"corner V5 mapped advance failed");
+	v5_corner_after.origin = v5_corner_position;
+	SurfacePosition64 v5_expected_first{};
+	require(try_sample_logical_chart(corner_chart_before, 1.0, 1.0, closed_100, v5_expected_first),
+		"corner V5 first expected sample failed");
+	const FramePosition64 v5_actual_first = ProjectionCOBE::map_forward(
+		static_cast<int>(v5_corner_position.face),
+		v5_corner_position.u_m / corner_extent_m,
+		v5_corner_position.v_m / corner_extent_m);
+	require(v5_actual_first.x * ProjectionCOBE::map_forward(static_cast<int>(v5_expected_first.face),
+		v5_expected_first.u_m / corner_extent_m, v5_expected_first.v_m / corner_extent_m).x +
+		v5_actual_first.y * ProjectionCOBE::map_forward(static_cast<int>(v5_expected_first.face),
+		v5_expected_first.u_m / corner_extent_m, v5_expected_first.v_m / corner_extent_m).y +
+		v5_actual_first.z * ProjectionCOBE::map_forward(static_cast<int>(v5_expected_first.face),
+		v5_expected_first.u_m / corner_extent_m, v5_expected_first.v_m / corner_extent_m).z > 1.0 - 1e-8,
+		"corner V5 observer move diverged from the rendered presentation direction");
+	LogicalSampleChart v5_corner_chart_after{};
+	require(try_transport_logical_sample_chart(corner_chart_before, v5_corner_after, closed_100, v5_corner_chart_after),
+		"corner V5 chart could not transport for held input");
+	FramePosition64 v5_second_delta{};
+	require(try_map_logical_chart_delta_to_face_delta(
+		v5_corner_chart_after, v5_corner_position, closed_100, 1.0, 1.0, v5_second_delta),
+		"corner V5 held delta could not map to face motion");
+	SurfaceFrame v5_second_after{};
+	SurfacePosition64 v5_second_position{};
+	uint32_t v5_second_crossings = 0;
+	require(try_advance_domain_surface_frame(
+		v5_second_delta, closed_100, v5_corner_after,
+		v5_second_after, v5_second_position, v5_second_crossings),
+		"corner V5 held mapped advance failed");
+	SurfacePosition64 v5_expected_second{};
+	require(try_sample_logical_chart(v5_corner_chart_after, 1.0, 1.0, closed_100, v5_expected_second),
+		"corner V5 held expected sample failed");
+	const FramePosition64 v5_actual_second = ProjectionCOBE::map_forward(
+		static_cast<int>(v5_second_position.face),
+		v5_second_position.u_m / corner_extent_m,
+		v5_second_position.v_m / corner_extent_m);
+	const FramePosition64 v5_expected_second_direction = ProjectionCOBE::map_forward(
+		static_cast<int>(v5_expected_second.face),
+		v5_expected_second.u_m / corner_extent_m,
+		v5_expected_second.v_m / corner_extent_m);
+	require(v5_actual_second.x * v5_expected_second_direction.x +
+		v5_actual_second.y * v5_expected_second_direction.y +
+		v5_actual_second.z * v5_expected_second_direction.z > 1.0 - 1e-8,
+		"held corner V5 input diverged from the rendered presentation direction");
+	std::cout << "corner_v5_motion_alignment=1\n";
+
+	// The editor consumes V5 deltas one viewport tick at a time. Walk well past
+	// a three-face corner so a rejected mapping cannot strand presentation and
+	// canonical state on opposite sides of the crossing.
+	auto walk_v5_corner_input = [&](const WorldDomainManifest& domain, const SurfaceFrame& start,
+		double presentation_dx_m, double presentation_dz_m, int steps) {
+		LogicalSampleChart chart{};
+		require(try_build_logical_sample_chart(start, domain, chart),
+			"three-face V5 walk could not build its starting chart");
+		SurfaceFrame frame = start;
+		SurfacePosition64 position = start.origin;
+		for (int step = 0; step < steps; ++step) {
+			FramePosition64 delta{};
+			require(try_map_logical_chart_delta_to_face_delta(
+				chart, position, domain, presentation_dx_m, presentation_dz_m, delta),
+				"three-face V5 walk rejected a presentation delta");
+			SurfaceFrame next_frame{};
+			SurfacePosition64 next_position{};
+			uint32_t crossings = 0;
+			require(try_advance_domain_surface_frame(
+				delta, domain, frame, next_frame, next_position, crossings),
+				"three-face V5 walk rejected a canonical advance");
+			next_frame.origin = next_position;
+			LogicalSampleChart next_chart{};
+			require(try_transport_logical_sample_chart(chart, next_frame, domain, next_chart),
+				"three-face V5 walk rejected chart transport");
+			chart = next_chart;
+			frame = next_frame;
+			position = next_position;
+		}
+	};
+	walk_v5_corner_input(closed_100, corner_before, 1.0, 1.0, 4096);
+	SurfaceFrame large_corner_before{};
+	require(try_make_flat_surface_frame_for_face(SurfaceFace::PositiveX, large_corner_before),
+		"large-world corner source frame unavailable");
+	const double large_corner_extent_m = static_cast<double>(closed.closed_surface.chart_half_extent_mm) * 0.001;
+	large_corner_before.origin.face = SurfaceFace::PositiveX;
+	large_corner_before.origin.u_m = large_corner_extent_m - 0.5;
+	large_corner_before.origin.v_m = large_corner_extent_m - 0.5;
+	large_corner_before.origin.topology_version = closed.topology_version;
+	large_corner_before.origin.projection_version = closed.projection_version;
+	large_corner_before.topology_version = closed.topology_version;
+	large_corner_before.projection_version = closed.projection_version;
+	walk_v5_corner_input(closed, large_corner_before, 1.0, 1.0, 4096);
+	std::cout << "corner_v5_continuous_editor_walk=1\n";
+
+	SurfaceFrame corner_after{};
+	SurfacePosition64 corner_after_position{};
+	uint32_t corner_transitions = 0;
+	require(try_advance_domain_surface_frame(
+		FramePosition64{ 1.0, 0.0, 1.0 }, closed_100, corner_before,
+		corner_after, corner_after_position, corner_transitions),
+		"diagonal corner transport failed");
+	require(corner_transitions == 2, "diagonal corner did not cross exactly two face edges");
+	corner_after.origin = corner_after_position;
+
+	// The endpoint may be beyond two edges while the travel path meets V first.
+	// The old endpoint canonicalizer always resolved U first, so one large move
+	// diverged from the same move split at its real first crossing.
+	SurfaceFrame ordered_start{};
+	require(try_make_flat_surface_frame_for_face(SurfaceFace::PositiveX, ordered_start),
+		"ordered corner source frame unavailable");
+	ordered_start.origin.face = SurfaceFace::PositiveX;
+	ordered_start.origin.u_m = corner_extent_m - 50.0;
+	ordered_start.origin.v_m = corner_extent_m - 10.0;
+	ordered_start.origin.topology_version = closed_100.topology_version;
+	ordered_start.origin.projection_version = closed_100.projection_version;
+	ordered_start.topology_version = closed_100.topology_version;
+	ordered_start.projection_version = closed_100.projection_version;
+	SurfaceFrame ordered_full_frame{};
+	SurfacePosition64 ordered_full_position{};
+	uint32_t ordered_full_crossings = 0;
+	require(try_advance_domain_surface_frame(
+		FramePosition64{ 100.0, 0.0, 100.0 }, closed_100, ordered_start,
+		ordered_full_frame, ordered_full_position, ordered_full_crossings),
+		"ordered full corner advance failed");
+	SurfaceFrame ordered_split_frame{};
+	SurfacePosition64 ordered_split_position{};
+	uint32_t ordered_split_first_crossings = 0;
+	require(try_advance_domain_surface_frame(
+		FramePosition64{ 20.0, 0.0, 20.0 }, closed_100, ordered_start,
+		ordered_split_frame, ordered_split_position, ordered_split_first_crossings),
+		"ordered split first advance failed");
+	const FramePosition64 remaining_flat_input{ 80.0, 0.0, 80.0 };
+	const FramePosition64 remaining_split_local{
+		ordered_split_frame.tangent_basis.u_axis.x * remaining_flat_input.x +
+			ordered_split_frame.tangent_basis.u_axis.z * remaining_flat_input.z,
+		0.0,
+		ordered_split_frame.tangent_basis.v_axis.x * remaining_flat_input.x +
+			ordered_split_frame.tangent_basis.v_axis.z * remaining_flat_input.z
+	};
+	SurfaceFrame ordered_split_final_frame{};
+	SurfacePosition64 ordered_split_final_position{};
+	uint32_t ordered_split_second_crossings = 0;
+	require(try_advance_domain_surface_frame(
+		remaining_split_local, closed_100, ordered_split_frame,
+		ordered_split_final_frame, ordered_split_final_position, ordered_split_second_crossings),
+		"ordered split second advance failed");
+	require(ordered_full_position.face == ordered_split_final_position.face &&
+		std::abs(ordered_full_position.u_m - ordered_split_final_position.u_m) < 1e-6 &&
+		std::abs(ordered_full_position.v_m - ordered_split_final_position.v_m) < 1e-6 &&
+		ordered_full_frame.tangent_basis.u_axis.x == ordered_split_final_frame.tangent_basis.u_axis.x &&
+		ordered_full_frame.tangent_basis.u_axis.z == ordered_split_final_frame.tangent_basis.u_axis.z &&
+		ordered_full_frame.tangent_basis.v_axis.x == ordered_split_final_frame.tangent_basis.v_axis.x &&
+		ordered_full_frame.tangent_basis.v_axis.z == ordered_split_final_frame.tangent_basis.v_axis.z,
+		"endpoint crossing order diverged from path-ordered traversal");
+	LogicalSampleChart corner_chart_after{};
+	require(try_transport_logical_sample_chart(corner_chart_before, corner_after, closed_100, corner_chart_after),
+		"continuous corner chart transport failed");
+	const auto dot3 = [](const FramePosition64& a, const FramePosition64& b) {
+		return a.x * b.x + a.y * b.y + a.z * b.z;
+	};
+	const auto length3 = [&](const FramePosition64& value) { return std::sqrt(dot3(value, value)); };
+	// Controls are expressed in the unfolded presentation plane, never in the
+	// renderer's spherical chart. Verify that the exact same flat diagonal is
+	// preserved while topology resolves the two-edge corner crossing.
+	const FramePosition64 corner_flat_input{
+		corner_before.tangent_basis.u_axis.x + corner_before.tangent_basis.u_axis.z,
+		0.0,
+		corner_before.tangent_basis.v_axis.x + corner_before.tangent_basis.v_axis.z
+	};
+	SurfaceFrame corner_input_after{};
+	SurfacePosition64 corner_input_position{};
+	uint32_t corner_input_transitions = 0;
+	require(try_advance_domain_surface_frame(
+		corner_flat_input, closed_100, corner_before, corner_input_after,
+		corner_input_position, corner_input_transitions),
+		"corner flat input advance failed");
+	require(corner_input_transitions == 2,
+		"flat corner input did not preserve the two-edge crossing");
+	const double recovered_flat_x =
+		corner_before.tangent_basis.u_axis.x * corner_flat_input.x +
+		corner_before.tangent_basis.v_axis.x * corner_flat_input.z;
+	const double recovered_flat_z =
+		corner_before.tangent_basis.u_axis.z * corner_flat_input.x +
+		corner_before.tangent_basis.v_axis.z * corner_flat_input.z;
+	require(std::abs(recovered_flat_x - 1.0) < 1e-12 &&
+		std::abs(recovered_flat_z - 1.0) < 1e-12,
+		"flat corner input was rotated into chart-space steering");
+	require(std::abs(dot3(corner_chart_after.root_direction, corner_chart_after.presentation_x_angular_tangent)) < 1e-12 &&
+		std::abs(dot3(corner_chart_after.root_direction, corner_chart_after.presentation_z_angular_tangent)) < 1e-12,
+		"corner chart tangents are not tangent to the transported canonical direction");
+	require(std::abs(length3(corner_chart_after.presentation_x_angular_tangent) -
+		length3(corner_chart_before.presentation_x_angular_tangent)) < 1e-12 &&
+		std::abs(length3(corner_chart_after.presentation_z_angular_tangent) -
+		length3(corner_chart_before.presentation_z_angular_tangent)) < 1e-12,
+		"corner chart transport changed the local metric scale");
+	std::cout << "corner_chart_continuous_transport=1\n";
+	std::cout << "corner_path_ordered_traversal=1\n";
+
 	SurfaceFrame moved_chart_root{};
 	SurfacePosition64 moved_chart_position{};
 	uint32_t moved_chart_transitions = 0;
-	const FramePosition64 one_metre_presentation_x{
+	const FramePosition64 logical_chart_one_metre_presentation_x{
 		cliff_local_root.tangent_basis.u_axis.x,
 		0.0,
 		cliff_local_root.tangent_basis.v_axis.x
 	};
 	require(try_advance_domain_surface_frame(
-		one_metre_presentation_x, closed_100, cliff_local_root,
+		logical_chart_one_metre_presentation_x, closed_100, cliff_local_root,
 		moved_chart_root, moved_chart_position, moved_chart_transitions),
 		"logical chart temporal probe could not move its root");
 	moved_chart_root.origin = moved_chart_position;

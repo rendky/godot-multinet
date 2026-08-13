@@ -1,6 +1,7 @@
 #include "godot/terrain_adapter.h"
 #include "multinet/core/spatial/surface_topology.h"
 #include "multinet/core/spatial/surface_coordinate_conversion.h"
+#include "multinet/rendering/terrain/block_clipmap/terrain_sample_patch.h"
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/classes/engine.hpp>
@@ -10,6 +11,7 @@
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <iostream>
 #include <condition_variable>
+#include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <cmath>
@@ -101,6 +103,53 @@ Multinet::WorldScaleManifest make_compatibility_scale(const Multinet::WorldDomai
 	return scale;
 }
 
+void refresh_tracking_logical_chart(
+	const Multinet::WorldDomainManifest& domain,
+	const Multinet::SurfaceFrame& root,
+	bool& has_chart,
+	Multinet::FramePosition64& root_direction,
+	Multinet::FramePosition64& presentation_x_tangent,
+	Multinet::FramePosition64& presentation_z_tangent
+) {
+	if (!domain.is_valid() || domain.is_finite()) {
+		has_chart = false;
+		return;
+	}
+	multinet::rendering::LogicalSampleChart chart{};
+	if (has_chart) {
+		const multinet::rendering::LogicalSampleChart previous{
+			root_direction, presentation_x_tangent, presentation_z_tangent
+		};
+		if (!multinet::rendering::try_transport_logical_sample_chart(previous, root, domain, chart)) {
+			has_chart = false;
+		}
+	}
+	if (!has_chart && !multinet::rendering::try_build_logical_sample_chart(root, domain, chart)) return;
+	root_direction = chart.root_direction;
+	presentation_x_tangent = chart.presentation_x_angular_tangent;
+	presentation_z_tangent = chart.presentation_z_angular_tangent;
+	has_chart = true;
+}
+
+bool try_map_closed_presentation_motion(
+	const Multinet::WorldDomainManifest& domain,
+	const Multinet::SurfacePosition64& position,
+	bool has_chart,
+	const Multinet::FramePosition64& root_direction,
+	const Multinet::FramePosition64& presentation_x_tangent,
+	const Multinet::FramePosition64& presentation_z_tangent,
+	double presentation_dx_m,
+	double presentation_dz_m,
+	Multinet::FramePosition64& out_local_delta
+) {
+	if (domain.is_finite() || !has_chart) return false;
+	const multinet::rendering::LogicalSampleChart chart{
+		root_direction, presentation_x_tangent, presentation_z_tangent
+	};
+	return multinet::rendering::try_map_logical_chart_delta_to_face_delta(
+		chart, position, domain, presentation_dx_m, presentation_dz_m, out_local_delta);
+}
+
 Multinet::SurfaceFrame make_editor_frame_for_face(
 	Multinet::WorldDomainTopology topology,
 	Multinet::SurfaceFace face,
@@ -125,6 +174,36 @@ Multinet::SurfaceFrame make_editor_frame_for_face(
 		frame.tangent_basis = flat_basis.tangent_basis;
 	}
 	return frame;
+}
+
+bool try_flat_edge_direction(
+	const Multinet::SurfaceFrame& frame,
+	Multinet::SurfaceEdge edge,
+	double& out_x,
+	double& out_z
+) noexcept {
+	const double a00 = frame.tangent_basis.u_axis.x;
+	const double a01 = frame.tangent_basis.u_axis.z;
+	const double a10 = frame.tangent_basis.v_axis.x;
+	const double a11 = frame.tangent_basis.v_axis.z;
+	const double det = a00 * a11 - a01 * a10;
+	if (!std::isfinite(det) || std::abs(det) < 1e-9) return false;
+
+	double du = 0.0;
+	double dv = 0.0;
+	switch (edge) {
+		case Multinet::SurfaceEdge::NegativeU: du = -1.0; break;
+		case Multinet::SurfaceEdge::PositiveU: du = 1.0; break;
+		case Multinet::SurfaceEdge::NegativeV: dv = -1.0; break;
+		case Multinet::SurfaceEdge::PositiveV: dv = 1.0; break;
+	}
+	out_x = (a11 * du - a01 * dv) / det;
+	out_z = (-a10 * du + a00 * dv) / det;
+	const double length = std::sqrt(out_x * out_x + out_z * out_z);
+	if (!std::isfinite(length) || length < 1e-9) return false;
+	out_x /= length;
+	out_z /= length;
+	return true;
 }
 }
 
@@ -167,6 +246,9 @@ void MultinetBCCMNode3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_world_extent_z_km"), &MultinetBCCMNode3D::get_world_extent_z_km);
 	ClassDB::bind_method(D_METHOD("set_closed_equivalent_side_km", "kilometres"), &MultinetBCCMNode3D::set_closed_equivalent_side_km);
 	ClassDB::bind_method(D_METHOD("get_closed_equivalent_side_km"), &MultinetBCCMNode3D::get_closed_equivalent_side_km);
+	ClassDB::bind_method(D_METHOD("set_closed_flat_coverage_radius_blocks", "radius"), &MultinetBCCMNode3D::set_closed_flat_coverage_radius_blocks);
+	ClassDB::bind_method(D_METHOD("get_closed_flat_coverage_radius_blocks"), &MultinetBCCMNode3D::get_closed_flat_coverage_radius_blocks);
+	ClassDB::bind_method(D_METHOD("get_closed_flat_visible_extent_km"), &MultinetBCCMNode3D::get_closed_flat_visible_extent_km);
 	ClassDB::bind_method(D_METHOD("set_chp_enabled", "enabled"), &MultinetBCCMNode3D::set_chp_enabled);
 	ClassDB::bind_method(D_METHOD("get_chp_enabled"), &MultinetBCCMNode3D::get_chp_enabled);
 	ClassDB::bind_method(D_METHOD("set_chp_radius_policy", "policy"), &MultinetBCCMNode3D::set_chp_radius_policy);
@@ -236,6 +318,8 @@ void MultinetBCCMNode3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "world_extent_z_km", PROPERTY_HINT_RANGE, "0.001, 4294967.295, 0.001"), "set_world_extent_z_km", "get_world_extent_z_km");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "closed_equivalent_side_km", PROPERTY_HINT_RANGE, "0.079, 4294967.295, 0.001"), "set_closed_equivalent_side_km", "get_closed_equivalent_side_km");
 	ADD_GROUP("World Presentation", "");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "closed_flat_coverage_radius_blocks", PROPERTY_HINT_RANGE, "1, 8, 1"), "set_closed_flat_coverage_radius_blocks", "get_closed_flat_coverage_radius_blocks");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "closed_flat_visible_extent_km", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY), "", "get_closed_flat_visible_extent_km");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "chp_enabled"), "set_chp_enabled", "get_chp_enabled");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "chp_radius_policy", PROPERTY_HINT_ENUM, "CanonicalClosedSurface:0,AreaEquivalent:1,Explicit:2"), "set_chp_radius_policy", "get_chp_radius_policy");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "chp_explicit_radius_km", PROPERTY_HINT_RANGE, "0.001, 4294967.295, 0.001"), "set_chp_explicit_radius_km", "get_chp_explicit_radius_km");
@@ -257,6 +341,9 @@ void MultinetBCCMNode3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_analytic_debug_prewarm_pages", "prewarm"), &MultinetBCCMNode3D::set_analytic_debug_prewarm_pages);
 	ClassDB::bind_method(D_METHOD("get_analytic_debug_prewarm_pages"), &MultinetBCCMNode3D::get_analytic_debug_prewarm_pages);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "analytic_debug_prewarm_pages"), "set_analytic_debug_prewarm_pages", "get_analytic_debug_prewarm_pages");
+	ClassDB::bind_method(D_METHOD("set_face_colors_enabled", "enabled"), &MultinetBCCMNode3D::set_face_colors_enabled);
+	ClassDB::bind_method(D_METHOD("get_face_colors_enabled"), &MultinetBCCMNode3D::get_face_colors_enabled);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "face_colors_enabled"), "set_face_colors_enabled", "get_face_colors_enabled");
 
 	ClassDB::bind_method(D_METHOD("set_camera_target", "path"), &MultinetBCCMNode3D::set_camera_target);
 	ClassDB::bind_method(D_METHOD("get_camera_target"), &MultinetBCCMNode3D::get_camera_target);
@@ -280,12 +367,20 @@ void MultinetBCCMNode3D::_validate_property(PropertyInfo& p_property) const {
 	if (name == StringName("world_side_km") && !finite_square) hide();
 	if ((name == StringName("world_extent_x_km") || name == StringName("world_extent_z_km")) && !finite_rectangle) hide();
 	if (name == StringName("closed_equivalent_side_km") && !wrapping) hide();
+	if ((name == StringName("closed_flat_coverage_radius_blocks") || name == StringName("closed_flat_visible_extent_km")) && !wrapping) hide();
 
 	if (name == StringName("logical_radius_km") && !wrapping) hide();
 	if ((name == StringName("closed_face_extent_km") || name == StringName("closed_face_half_extent_km") ||
 			 name == StringName("regions_per_face_axis") || name == StringName("actual_region_extent_m")) && !wrapping) hide();
 
 	if ((name == StringName("chp_radius_policy") || name == StringName("chp_explicit_radius_km")) && !chp_visible) hide();
+}
+
+bool MultinetBCCMNode3D::configure_bccm_profile() {
+	if (bccm_renderer.set_candidate_grid_radius(closed_flat_coverage_radius_blocks)) return true;
+	std::cerr << "[MultinetBCCMNode3D] invalid or late closed flat coverage radius: "
+		<< closed_flat_coverage_radius_blocks << std::endl;
+	return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -351,7 +446,7 @@ void MultinetBCCMNode3D::apply_recipe_rebuild() {
 	if (get_world_3d().is_valid()) {
 		auto* rs = godot::RenderingServer::get_singleton();
 		Multinet::TerrainFallbackBounds fb = render_source->get_snapshot().fallback_bounds;
-		if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
+		if (!configure_bccm_profile() || !bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
 			std::cerr << "[MultinetBCCMNode3D] apply_recipe_rebuild: renderer initialization failed." << std::endl;
 		} else {
 			bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
@@ -476,6 +571,13 @@ void MultinetBCCMNode3D::set_canonical_camera_state_from_values(
 	current_cam_state.unfolding_root_presentation_x_m = 0.0;
 	current_cam_state.unfolding_root_presentation_z_m = 0.0;
 	current_cam_state.has_unfolding_root = true;
+	refresh_tracking_logical_chart(
+		world_domain_manifest,
+		current_cam_state.unfolding_root_frame,
+		current_cam_state.has_logical_chart,
+		current_cam_state.logical_chart_root_direction,
+		current_cam_state.logical_chart_presentation_x_tangent,
+		current_cam_state.logical_chart_presentation_z_tangent);
 }
 
 godot::Dictionary MultinetBCCMNode3D::advance_canonical_observer(
@@ -521,6 +623,13 @@ godot::Dictionary MultinetBCCMNode3D::advance_canonical_observer(
 		current_cam_state.unfolding_root_presentation_x_m = current_cam_state.presentation_x_m;
 		current_cam_state.unfolding_root_presentation_z_m = current_cam_state.presentation_z_m;
 		current_cam_state.has_unfolding_root = true;
+		refresh_tracking_logical_chart(
+			world_domain_manifest,
+			current_cam_state.unfolding_root_frame,
+			current_cam_state.has_logical_chart,
+			current_cam_state.logical_chart_root_direction,
+			current_cam_state.logical_chart_presentation_x_tangent,
+			current_cam_state.logical_chart_presentation_z_tangent);
 	}
 
 	Multinet::SurfaceFrame next_frame;
@@ -529,15 +638,36 @@ godot::Dictionary MultinetBCCMNode3D::advance_canonical_observer(
 	Multinet::SurfaceFace last_source = current_cam_state.canonical_position.face;
 	Multinet::SurfaceFace last_destination = last_source;
 	Multinet::SurfaceEdge last_edge = Multinet::SurfaceEdge::NegativeU;
-	// The controller speaks in the stable flat presentation plane. Transport
-	// that intent into the current canonical chart before advancing authority.
-	const double canonical_local_u =
-		current_cam_state.active_frame.tangent_basis.u_axis.x * p_presentation_dx +
-		current_cam_state.active_frame.tangent_basis.u_axis.z * p_presentation_dz;
-	const double canonical_local_v =
-		current_cam_state.active_frame.tangent_basis.v_axis.x * p_presentation_dx +
-		current_cam_state.active_frame.tangent_basis.v_axis.z * p_presentation_dz;
-	const Multinet::FramePosition64 local_delta{ canonical_local_u, p_altitude_dy, canonical_local_v };
+	Multinet::FramePosition64 local_delta{};
+	const bool closed_chart_motion = !world_domain_manifest.is_finite() &&
+		current_cam_state.has_logical_chart;
+	if (closed_chart_motion) {
+		// The visible V5 surface and the observer must consume the same flat
+		// presentation vector. Using the cube frame here lets a held key walk away
+		// from the terrain direction at a three-face corner.
+		if (!try_map_closed_presentation_motion(
+			world_domain_manifest,
+			current_cam_state.canonical_position,
+			current_cam_state.has_logical_chart,
+			current_cam_state.logical_chart_root_direction,
+			current_cam_state.logical_chart_presentation_x_tangent,
+			current_cam_state.logical_chart_presentation_z_tangent,
+			p_presentation_dx,
+			p_presentation_dz,
+			local_delta
+		)) {
+			return result;
+		}
+	} else {
+		const double canonical_local_u =
+			current_cam_state.active_frame.tangent_basis.u_axis.x * p_presentation_dx +
+			current_cam_state.active_frame.tangent_basis.u_axis.z * p_presentation_dz;
+		const double canonical_local_v =
+			current_cam_state.active_frame.tangent_basis.v_axis.x * p_presentation_dx +
+			current_cam_state.active_frame.tangent_basis.v_axis.z * p_presentation_dz;
+		local_delta = Multinet::FramePosition64{ canonical_local_u, 0.0, canonical_local_v };
+	}
+	local_delta.y = p_altitude_dy;
 	const double presentation_dx = p_presentation_dx;
 	const double presentation_dz = p_presentation_dz;
 	if (!Multinet::try_advance_domain_surface_frame(
@@ -563,23 +693,24 @@ godot::Dictionary MultinetBCCMNode3D::advance_canonical_observer(
 	current_cam_state.presentation_x_m += presentation_dx;
 	current_cam_state.presentation_z_m += presentation_dz;
 	if (!world_domain_manifest.is_finite()) {
-		const double chart_dx_m = current_cam_state.presentation_x_m -
-			current_cam_state.unfolding_root_presentation_x_m;
-		const double chart_dz_m = current_cam_state.presentation_z_m -
-			current_cam_state.unfolding_root_presentation_z_m;
-		const double rebase_radius_m =
-			Multinet::closed_flat_chart_max_radius_m(world_domain_manifest) * 0.25;
-		if (rebase_radius_m > 0.0 &&
-			chart_dx_m * chart_dx_m + chart_dz_m * chart_dz_m > rebase_radius_m * rebase_radius_m) {
-			// Keep the flat BCCM inside a locally metric sphere chart. This is an
-			// atlas rebase, not a canonical teleport.
+		const bool analytic_chart_can_track =
+			bccm_renderer.get_source_mode() == multinet::rendering::TerrainSourceMode::AnalyticBase &&
+			!bccm_renderer.get_analytic_debug_prewarm_pages();
+		if (analytic_chart_can_track) {
+			// AnalyticBase has no chart-addressed page payload to invalidate. Keep
+			// V5 local every movement tick rather than letting its exponential map
+			// fold the flat viewport after a long run.
 			current_cam_state.unfolding_root_frame = next_frame;
 			current_cam_state.unfolding_root_frame.origin.altitude_m = 0.0;
 			current_cam_state.unfolding_root_presentation_x_m = current_cam_state.presentation_x_m;
 			current_cam_state.unfolding_root_presentation_z_m = current_cam_state.presentation_z_m;
-			current_cam_state.unfolding_generation =
-				current_cam_state.unfolding_generation == (std::numeric_limits<uint64_t>::max)()
-				? 1 : current_cam_state.unfolding_generation + 1;
+			refresh_tracking_logical_chart(
+				world_domain_manifest,
+				current_cam_state.unfolding_root_frame,
+				current_cam_state.has_logical_chart,
+				current_cam_state.logical_chart_root_direction,
+				current_cam_state.logical_chart_presentation_x_tangent,
+				current_cam_state.logical_chart_presentation_z_tangent);
 		}
 	}
 	runtime_outside_finite_boundary = false;
@@ -847,7 +978,7 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 			if (!bccm_renderer.initialized() && get_world_3d().is_valid() && manifest_built && render_source) {
 				auto* rs = godot::RenderingServer::get_singleton();
 				Multinet::TerrainFallbackBounds fb = render_source->get_snapshot().fallback_bounds;
-				if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
+				if (!configure_bccm_profile() || !bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
 					std::cerr << "[MultinetBCCMNode3D] Renderer initialization failed (process)." << std::endl;
 				} else {
 		bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
@@ -874,6 +1005,10 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 				current_cam_state.unfolding_root_presentation_x_m = editor_observer_state.unfolding_root_presentation_x_m;
 				current_cam_state.unfolding_root_presentation_z_m = editor_observer_state.unfolding_root_presentation_z_m;
 				current_cam_state.has_unfolding_root = true;
+				current_cam_state.logical_chart_root_direction = editor_observer_state.logical_chart_root_direction;
+				current_cam_state.logical_chart_presentation_x_tangent = editor_observer_state.logical_chart_presentation_x_tangent;
+				current_cam_state.logical_chart_presentation_z_tangent = editor_observer_state.logical_chart_presentation_z_tangent;
+				current_cam_state.has_logical_chart = editor_observer_state.has_logical_chart;
 				current_cam_state.has_presentation_binding = true;
 				current_cam_state.presentation_basis = godot::Basis();
 				current_cam_state.presentation_origin = editor_observer_state.presentation_origin_world;
@@ -911,12 +1046,20 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 			}
 
 			if (cam) {
+				const godot::Vector3 camera_forward = -cam->get_global_transform().basis.get_column(2);
+				const double heading_length = std::sqrt(
+					static_cast<double>(camera_forward.x) * camera_forward.x +
+					static_cast<double>(camera_forward.z) * camera_forward.z);
+				if (std::isfinite(heading_length) && heading_length > 1e-6) {
+					camera_forward_world = camera_forward;
+					has_camera_forward_world = true;
+				}
 				if (recipe_rebuild_pending) apply_recipe_rebuild();
 				if (source_dirty || !render_source) rebuild_source();
 				if (!bccm_renderer.initialized() && get_world_3d().is_valid() && manifest_built && render_source) {
 					auto* rs = godot::RenderingServer::get_singleton();
 					Multinet::TerrainFallbackBounds fb = render_source->get_snapshot().fallback_bounds;
-					if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
+					if (!configure_bccm_profile() || !bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
 						std::cerr << "[MultinetBCCMNode3D] Renderer initialization failed." << std::endl;
 					} else {
 						bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
@@ -945,7 +1088,7 @@ void MultinetBCCMNode3D::init_rendering() {
 	if (get_world_3d().is_valid()) {
 		auto* rs = godot::RenderingServer::get_singleton();
 		Multinet::TerrainFallbackBounds fb = render_source->get_snapshot().fallback_bounds;
-		if (!bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
+		if (!configure_bccm_profile() || !bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
 			std::cerr << "[MultinetBCCMNode3D] Renderer initialization failed (init_rendering)." << std::endl;
 		} else {
 			bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
@@ -1002,6 +1145,16 @@ void MultinetBCCMNode3D::set_analytic_debug_prewarm_pages(bool p_prewarm) {
 
 bool MultinetBCCMNode3D::get_analytic_debug_prewarm_pages() const {
 	return bccm_renderer.get_analytic_debug_prewarm_pages();
+}
+
+void MultinetBCCMNode3D::set_face_colors_enabled(bool p_enabled) {
+	if (face_colors_enabled == p_enabled) return;
+	face_colors_enabled = p_enabled;
+	bccm_renderer.set_face_colors_enabled(face_colors_enabled);
+}
+
+bool MultinetBCCMNode3D::get_face_colors_enabled() const {
+	return face_colors_enabled;
 }
 
 void MultinetBCCMNode3D::set_seed(uint32_t p_seed) {
@@ -1211,6 +1364,22 @@ void MultinetBCCMNode3D::set_closed_equivalent_side_km(double p_km) {
 
 double MultinetBCCMNode3D::get_closed_equivalent_side_km() const { return static_cast<double>(world_domain_input.closed_surface.area_equivalent_side_m) / 1000.0; }
 
+void MultinetBCCMNode3D::set_closed_flat_coverage_radius_blocks(int p_radius) {
+	const int maximum = multinet::rendering::BlockClipmapProfile::MAX_SUPPORTED_CANDIDATE_GRID_RADIUS;
+	const int clamped = std::clamp(p_radius, 1, maximum);
+	if (closed_flat_coverage_radius_blocks == clamped) return;
+	closed_flat_coverage_radius_blocks = clamped;
+	request_recipe_rebuild();
+}
+
+int MultinetBCCMNode3D::get_closed_flat_coverage_radius_blocks() const {
+	return closed_flat_coverage_radius_blocks;
+}
+
+double MultinetBCCMNode3D::get_closed_flat_visible_extent_km() const {
+	return bccm_renderer.get_effective_coverage_extent_m() / 1000.0;
+}
+
 void MultinetBCCMNode3D::set_chp_enabled(bool p_enabled) {
 	if (world_presentation_input.chp_enabled == p_enabled) return;
 	world_presentation_input.chp_enabled = p_enabled;
@@ -1370,6 +1539,9 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["runtime_last_transition_destination_face"] = runtime_last_transition_destination_face;
 	dict["runtime_last_transition_edge"] = runtime_last_transition_edge;
 	dict["runtime_outside_finite_boundary"] = runtime_outside_finite_boundary;
+	dict["camera_heading_valid"] = has_camera_forward_world;
+	dict["camera_heading_x"] = static_cast<double>(camera_forward_world.x);
+	dict["camera_heading_z"] = static_cast<double>(camera_forward_world.z);
 	const auto& streaming = bccm_renderer.get_last_streaming_diagnostics();
 	dict["closed_placement_failures"] = streaming.closed_placement_failures;
 	dict["canonical_duplicate_presentations_retained"] = streaming.canonical_duplicate_presentations_retained;
@@ -1385,9 +1557,23 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["editor_observer_vertical_speed_m_s"] = editor_observer_state.vertical_speed_m_s;
 	dict["editor_observer_total_speed_m_s"] = editor_observer_state.total_speed_m_s;
 	dict["editor_last_transition_count"] = editor_observer_state.last_transition_count;
+	dict["editor_last_transition_frame_epoch"] = static_cast<int64_t>(editor_observer_state.last_transition_frame_epoch);
+	dict["editor_last_transition_initial_face"] = editor_observer_state.last_transition_initial_face;
+	dict["editor_last_transition_final_face"] = editor_observer_state.last_transition_final_face;
 	dict["editor_view_world_x_m"] = editor_view_snapshot.world_position.x;
 	dict["editor_view_world_y_m"] = editor_view_snapshot.world_position.y;
 	dict["editor_view_world_z_m"] = editor_view_snapshot.world_position.z;
+	dict["editor_presentation_anchor_x_m"] = current_cam_state.presentation_origin.x;
+	dict["editor_presentation_anchor_z_m"] = current_cam_state.presentation_origin.z;
+	const double editor_presentation_anchor_lag_x_m =
+		static_cast<double>(editor_view_snapshot.world_position.x - current_cam_state.presentation_origin.x);
+	const double editor_presentation_anchor_lag_z_m =
+		static_cast<double>(editor_view_snapshot.world_position.z - current_cam_state.presentation_origin.z);
+	dict["editor_presentation_anchor_lag_m"] = std::sqrt(
+		editor_presentation_anchor_lag_x_m * editor_presentation_anchor_lag_x_m +
+		editor_presentation_anchor_lag_z_m * editor_presentation_anchor_lag_z_m);
+	dict["editor_rejected_chart_motion_count"] = static_cast<int64_t>(editor_observer_state.rejected_chart_motion_count);
+	dict["editor_rejected_frame_advance_count"] = static_cast<int64_t>(editor_observer_state.rejected_frame_advance_count);
 	dict["editor_ground_origin_y_m"] = editor_view_snapshot.world_position.y -
 		static_cast<float>(editor_observer_state.canonical_position.altitude_m);
 	const float expected_binding_origin_y = world_domain_manifest.is_finite()
@@ -1426,6 +1612,20 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 		dict["closed_flat_chart_max_radius_m"] = chart_max_radius_m;
 		dict["closed_flat_chart_observer_offset_m"] = chart_observer_offset_m;
 		dict["closed_flat_chart_observer_inside"] = chart_observer_offset_m <= chart_max_radius_m;
+		const double chart_outer_footprint_m = bccm_renderer.get_effective_coverage_corner_radius_m();
+		const double chart_worst_sample_radius_m = chart_observer_offset_m + chart_outer_footprint_m;
+		dict["closed_flat_coverage_radius_blocks"] = closed_flat_coverage_radius_blocks;
+		dict["closed_flat_visible_extent_km"] = get_closed_flat_visible_extent_km();
+		dict["closed_flat_chart_outer_footprint_m"] = chart_outer_footprint_m;
+		dict["closed_flat_chart_worst_sample_radius_m"] = chart_worst_sample_radius_m;
+		dict["closed_flat_chart_footprint_inside"] = chart_worst_sample_radius_m <= chart_max_radius_m;
+		const bool analytic_chart_tracking =
+			bccm_renderer.get_source_mode() == multinet::rendering::TerrainSourceMode::AnalyticBase &&
+			!bccm_renderer.get_analytic_debug_prewarm_pages();
+		dict["closed_flat_chart_tracking"] = analytic_chart_tracking;
+		dict["closed_flat_chart_tracking_reason"] = analytic_chart_tracking
+			? "AnalyticBase local chart"
+			: "chart-addressed pages require stable root";
 		dict["closed_face_extent_km"] = world_domain_manifest.is_valid() ? world_domain_manifest.closed_surface.area_equivalent_face_extent_m / 1000.0 : 0.0;
 		dict["closed_face_half_extent_km"] = world_domain_manifest.is_valid() ? world_domain_manifest.closed_surface.chart_half_extent_mm * 0.001 / 1000.0 : 0.0;
 		const double h = world_domain_manifest.is_valid() ? world_domain_manifest.closed_surface.chart_half_extent_mm * 0.001 : 0.0;
@@ -1433,6 +1633,38 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 		dict["closed_distance_to_positive_u_m"] = h - observer_u_m;
 		dict["closed_distance_to_negative_v_m"] = h + observer_v_m;
 		dict["closed_distance_to_positive_v_m"] = h - observer_v_m;
+
+		const double heading_length = std::sqrt(
+			static_cast<double>(camera_forward_world.x) * camera_forward_world.x +
+			static_cast<double>(camera_forward_world.z) * camera_forward_world.z);
+		const bool heading_valid = has_camera_forward_world && std::isfinite(heading_length) && heading_length > 1e-6;
+		dict["closed_transition_heading_valid"] = heading_valid;
+		if (heading_valid) {
+			const double heading_x = static_cast<double>(camera_forward_world.x) / heading_length;
+			const double heading_z = static_cast<double>(camera_forward_world.z) / heading_length;
+			dict["closed_transition_heading_x"] = heading_x;
+			dict["closed_transition_heading_z"] = heading_z;
+			const uint8_t active_face = static_cast<uint8_t>(current_cam_state.canonical_position.face);
+			const auto publish_edge = [&](const char* prefix, Multinet::SurfaceEdge edge, double edge_distance_m) {
+				double direction_x = 0.0;
+				double direction_z = 0.0;
+				const bool direction_valid = active_face < 6 && try_flat_edge_direction(
+					current_cam_state.active_frame, edge, direction_x, direction_z);
+				const double heading_dot = direction_valid ? heading_x * direction_x + heading_z * direction_z : 0.0;
+				const double signed_distance = std::abs(heading_dot) > 0.05 ? edge_distance_m / heading_dot : 0.0;
+				dict[godot::String(prefix) + "_destination_face"] = direction_valid
+					? static_cast<int>(Multinet::get_edge_transition(active_face, edge).destination_face) : -1;
+				dict[godot::String(prefix) + "_distance_m"] = edge_distance_m;
+				dict[godot::String(prefix) + "_direction_x"] = direction_x;
+				dict[godot::String(prefix) + "_direction_z"] = direction_z;
+				dict[godot::String(prefix) + "_heading_dot"] = heading_dot;
+				dict[godot::String(prefix) + "_signed_distance_m"] = signed_distance;
+			};
+			publish_edge("closed_transition_negative_u", Multinet::SurfaceEdge::NegativeU, h + observer_u_m);
+			publish_edge("closed_transition_positive_u", Multinet::SurfaceEdge::PositiveU, h - observer_u_m);
+			publish_edge("closed_transition_negative_v", Multinet::SurfaceEdge::NegativeV, h + observer_v_m);
+			publish_edge("closed_transition_positive_v", Multinet::SurfaceEdge::PositiveV, h - observer_v_m);
+		}
 	}
 
 	auto snap = std::make_unique<multinet::rendering::RendererDiagnosticSnapshot>();
@@ -1557,6 +1789,13 @@ void MultinetBCCMNode3D::update_editor_observer_from_editor_camera() {
 		return;
 	}
 	const godot::Vector3 current = editor_view_snapshot.world_position;
+	if (editor_observer_state.initialized && !world_domain_manifest.is_finite()) {
+		// Presentation placement is an editor-camera contract. A failed canonical
+		// step must remain diagnosable, but it must never strand the visible grid at
+		// its previous X/Z anchor while the editor camera keeps moving.
+		editor_observer_state.presentation_origin_world.x = current.x;
+		editor_observer_state.presentation_origin_world.z = current.z;
+	}
 	const uint64_t now_us = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count());
 	const bool domain_changed = editor_observer_state.domain_manifest_hash != world_domain_manifest.domain_manifest_hash;
@@ -1621,6 +1860,13 @@ void MultinetBCCMNode3D::update_editor_observer_from_editor_camera() {
 		editor_observer_state.unfolding_root_frame.origin.altitude_m = 0.0;
 		editor_observer_state.unfolding_root_presentation_x_m = static_cast<double>(current.x);
 		editor_observer_state.unfolding_root_presentation_z_m = static_cast<double>(current.z);
+		refresh_tracking_logical_chart(
+			world_domain_manifest,
+			editor_observer_state.unfolding_root_frame,
+			editor_observer_state.has_logical_chart,
+			editor_observer_state.logical_chart_root_direction,
+			editor_observer_state.logical_chart_presentation_x_tangent,
+			editor_observer_state.logical_chart_presentation_z_tangent);
 		editor_observer_state.presentation_origin_world = world_domain_manifest.is_finite()
 			? godot::Vector3(
 				static_cast<float>(editor_observer_state.canonical_position.u_m),
@@ -1670,18 +1916,30 @@ void MultinetBCCMNode3D::update_editor_observer_from_editor_camera() {
 				target_v_m - editor_observer_state.canonical_position.v_m
 			};
 		} else {
-			local_delta = Multinet::FramePosition64{
-				editor_observer_state.active_frame.tangent_basis.u_axis.x * static_cast<double>(delta.x) +
-					editor_observer_state.active_frame.tangent_basis.u_axis.z * static_cast<double>(delta.z),
-				static_cast<double>(delta.y),
-				editor_observer_state.active_frame.tangent_basis.v_axis.x * static_cast<double>(delta.x) +
-					editor_observer_state.active_frame.tangent_basis.v_axis.z * static_cast<double>(delta.z)
-			};
+			if (!try_map_closed_presentation_motion(
+				world_domain_manifest,
+				editor_observer_state.canonical_position,
+				editor_observer_state.has_logical_chart,
+				editor_observer_state.logical_chart_root_direction,
+				editor_observer_state.logical_chart_presentation_x_tangent,
+				editor_observer_state.logical_chart_presentation_z_tangent,
+				static_cast<double>(delta.x),
+				static_cast<double>(delta.z),
+				local_delta
+			)) {
+				// The chart is part of the Hybrid/page presentation contract. Do not
+				// silently fall back to cube-frame controls and split direction again.
+				++editor_observer_state.rejected_chart_motion_count;
+				editor_observer_state.last_editor_camera_world_position = current;
+				editor_observer_state.last_update_monotonic_us = now_us;
+				return;
+			}
 		}
+		local_delta.y = static_cast<double>(delta.y);
 		Multinet::SurfacePosition64 next_position;
 		Multinet::SurfaceFrame next_frame;
 		uint32_t transition_count = 0;
-		editor_observer_state.last_transition_count = 0;
+		const Multinet::SurfaceFace transition_initial_face = editor_observer_state.canonical_position.face;
 		Multinet::SurfaceFace last_source = editor_observer_state.canonical_position.face;
 		Multinet::SurfaceFace last_destination = last_source;
 		Multinet::SurfaceEdge last_edge = Multinet::SurfaceEdge::NegativeU;
@@ -1712,31 +1970,41 @@ void MultinetBCCMNode3D::update_editor_observer_from_editor_camera() {
 					current.y - static_cast<float>(next_position.altitude_m),
 					current.z
 				);
-				const double chart_dx_m = static_cast<double>(current.x) -
-					editor_observer_state.unfolding_root_presentation_x_m;
-				const double chart_dz_m = static_cast<double>(current.z) -
-					editor_observer_state.unfolding_root_presentation_z_m;
-				const double rebase_radius_m =
-					Multinet::closed_flat_chart_max_radius_m(world_domain_manifest) * 0.25;
-				if (rebase_radius_m > 0.0 &&
-					chart_dx_m * chart_dx_m + chart_dz_m * chart_dz_m > rebase_radius_m * rebase_radius_m) {
+				const bool analytic_chart_can_track =
+					bccm_renderer.get_source_mode() == multinet::rendering::TerrainSourceMode::AnalyticBase &&
+					!bccm_renderer.get_analytic_debug_prewarm_pages();
+				if (analytic_chart_can_track) {
+					// Move by the real observer delta, not a threshold jump. The old
+					// frozen chart caused the curved colour seam and pathological trig
+					// cost after long editor travel.
 					editor_observer_state.unfolding_root_frame = next_frame;
 					editor_observer_state.unfolding_root_frame.origin.altitude_m = 0.0;
 					editor_observer_state.unfolding_root_presentation_x_m = static_cast<double>(current.x);
 					editor_observer_state.unfolding_root_presentation_z_m = static_cast<double>(current.z);
-					editor_observer_state.presentation_generation =
-						editor_observer_state.presentation_generation == (std::numeric_limits<uint64_t>::max)()
-						? 1 : editor_observer_state.presentation_generation + 1;
+					refresh_tracking_logical_chart(
+						world_domain_manifest,
+						editor_observer_state.unfolding_root_frame,
+						editor_observer_state.has_logical_chart,
+						editor_observer_state.logical_chart_root_direction,
+						editor_observer_state.logical_chart_presentation_x_tangent,
+						editor_observer_state.logical_chart_presentation_z_tangent);
 				}
 			}
-			editor_observer_state.last_transition_count = transition_count;
 			if (transition_count > 0) {
+				editor_observer_state.last_transition_count = transition_count;
+				editor_observer_state.last_transition_frame_epoch = next_frame.frame_epoch;
+				editor_observer_state.last_transition_initial_face = static_cast<int>(transition_initial_face);
+				editor_observer_state.last_transition_final_face = static_cast<int>(next_position.face);
 				editor_observer_state.last_transition_source_face = static_cast<int>(last_source);
 				editor_observer_state.last_transition_destination_face = static_cast<int>(last_destination);
 				editor_observer_state.last_transition_edge = static_cast<int>(last_edge);
 			}
-		} else if (world_domain_manifest.is_finite()) {
-			editor_observer_state.outside_viewport_camera = true;
+		} else {
+			if (world_domain_manifest.is_finite()) {
+				editor_observer_state.outside_viewport_camera = true;
+			} else {
+				++editor_observer_state.rejected_frame_advance_count;
+			}
 		}
 	}
 	editor_observer_state.last_editor_camera_world_position = current;
@@ -1755,6 +2023,12 @@ void MultinetBCCMNode3D::publish_editor_view_camera(godot::Camera3D* p_editor_ca
 	// Copy position and frustum planes from the actual editor viewport camera.
 	// No Camera3D pointer is retained beyond this function.
 	editor_view_snapshot.world_position = p_editor_camera->get_global_position();
+	editor_view_snapshot.camera_forward_world = -p_editor_camera->get_global_transform().basis.get_column(2);
+	camera_forward_world = editor_view_snapshot.camera_forward_world;
+	const double heading_length = std::sqrt(
+		static_cast<double>(camera_forward_world.x) * camera_forward_world.x +
+		static_cast<double>(camera_forward_world.z) * camera_forward_world.z);
+	has_camera_forward_world = std::isfinite(heading_length) && heading_length > 1e-6;
 	editor_view_snapshot.frustum = multinet::rendering::FrustumPlanes::extract_from_camera(p_editor_camera);
 	editor_view_snapshot.valid = editor_view_snapshot.frustum.valid;
 

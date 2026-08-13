@@ -129,11 +129,19 @@ int main() {
     require(large_canon.v_mm >= -extent && large_canon.v_mm <= extent, "Multi-face overshoot V bounds");
     require(canonicalize_surface_address(large_canon, scale) == large_canon, "Idempotence failed on overshoot");
     
-    // Rejection beyond accepted bound
-    SurfaceAddress rejected = large;
-    rejected.u_mm = 5 * extent; // Max overshoot is 3 * extent, so 5 * extent exceeds it
-    SurfaceAddress canon_rejected = canonicalize_surface_address(rejected, scale);
-    require(static_cast<uint8_t>(canon_rejected.face) == 255, "Unbounded overshoot not safely rejected");
+    // The old fixed 3*extent guard is gone. A representable five-extent input
+    // is accepted because the safety bound is derived from the actual input.
+    SurfaceAddress farther = large;
+    farther.u_mm = 5 * extent;
+    SurfaceAddress canon_farther = canonicalize_surface_address(farther, scale);
+    require(static_cast<uint8_t>(canon_farther.face) != 255, "Derived representable overshoot was rejected");
+    require(canonicalize_surface_address(canon_farther, scale) == canon_farther,
+        "Idempotence failed on derived overshoot");
+
+    SurfaceAddress invalid_face = large;
+    invalid_face.face = static_cast<SurfaceFace>(255);
+    require(static_cast<uint8_t>(canonicalize_surface_address(invalid_face, scale).face) == 255,
+        "Invalid canonical face was admitted");
     
     std::cout << "- Bounded Overshoot Validated\n";
     std::cout << "- Identity Preservation Validated\n";

@@ -2,8 +2,12 @@
 
 namespace Multinet {
 
-BoundedBackgroundJobExecutor::BoundedBackgroundJobExecutor() {
-	worker_ = std::thread([this] { worker_loop(); });
+BoundedBackgroundJobExecutor::BoundedBackgroundJobExecutor(size_t worker_count)
+	: worker_count_(worker_count == 0 ? 1 : worker_count) {
+	workers_.reserve(worker_count_);
+	for (size_t i = 0; i < worker_count_; ++i) {
+		workers_.emplace_back([this] { worker_loop(); });
+	}
 }
 
 BoundedBackgroundJobExecutor::~BoundedBackgroundJobExecutor() {
@@ -18,21 +22,28 @@ bool BoundedBackgroundJobExecutor::submit(
 	std::unique_lock<std::mutex> lock(mutex_);
 	if (stopped_.load(std::memory_order_acquire)) return false;
 
-	if (count_ >= QUEUE_CAPACITY) {
-		overflow_ = true;
-		return false;
-	}
-
-	JobEntry& entry = queue_[tail_];
+	JobEntry entry;
 	entry.work = std::move(work);
 	entry.priority = priority;
 	entry.token = token;
 	entry.active = true;
 
-	tail_ = (tail_ + 1) % QUEUE_CAPACITY;
-	++count_;
+	bool ok = false;
+	if (priority == JobPriority::HIGH) {
+		ok = lane_high_.enqueue(std::move(entry));
+	} else if (priority == JobPriority::LOW) {
+		ok = lane_low_.enqueue(std::move(entry));
+	} else {
+		ok = lane_normal_.enqueue(std::move(entry));
+	}
+
+	if (!ok) {
+		overflow_ = true;
+		return false;
+	}
+
 	lock.unlock();
-	cv_.notify_one();
+	cv_.notify_all();
 	return true;
 }
 
@@ -43,14 +54,37 @@ void BoundedBackgroundJobExecutor::shutdown() {
 		stopped_.store(true, std::memory_order_release);
 	}
 	cv_.notify_all();
-	if (worker_.joinable()) {
-		worker_.join();
+	for (auto& worker : workers_) {
+		if (worker.joinable()) {
+			worker.join();
+		}
 	}
+	workers_.clear();
 }
 
 size_t BoundedBackgroundJobExecutor::pending_count() const noexcept {
 	std::lock_guard<std::mutex> lock(mutex_);
-	return count_;
+	return lane_high_.count + lane_normal_.count + lane_low_.count;
+}
+
+size_t BoundedBackgroundJobExecutor::high_priority_count() const noexcept {
+	std::lock_guard<std::mutex> lock(mutex_);
+	return lane_high_.count;
+}
+
+size_t BoundedBackgroundJobExecutor::normal_priority_count() const noexcept {
+	std::lock_guard<std::mutex> lock(mutex_);
+	return lane_normal_.count;
+}
+
+size_t BoundedBackgroundJobExecutor::low_priority_count() const noexcept {
+	std::lock_guard<std::mutex> lock(mutex_);
+	return lane_low_.count;
+}
+
+size_t BoundedBackgroundJobExecutor::executing_worker_count() const noexcept {
+	std::lock_guard<std::mutex> lock(mutex_);
+	return executing_count_;
 }
 
 bool BoundedBackgroundJobExecutor::is_running() const noexcept {
@@ -59,13 +93,15 @@ bool BoundedBackgroundJobExecutor::is_running() const noexcept {
 
 bool BoundedBackgroundJobExecutor::is_idle() const noexcept {
 	std::lock_guard<std::mutex> lock(mutex_);
-	return count_ == 0 && executing_count_ == 0;
+	size_t pending = lane_high_.count + lane_normal_.count + lane_low_.count;
+	return pending == 0 && executing_count_ == 0;
 }
 
 bool BoundedBackgroundJobExecutor::wait_idle_for(std::chrono::milliseconds timeout) const noexcept {
 	std::unique_lock<std::mutex> lock(mutex_);
 	return idle_cv_.wait_for(lock, timeout, [this] {
-		return count_ == 0 && executing_count_ == 0;
+		size_t pending = lane_high_.count + lane_normal_.count + lane_low_.count;
+		return pending == 0 && executing_count_ == 0;
 	});
 }
 
@@ -75,17 +111,45 @@ void BoundedBackgroundJobExecutor::worker_loop() {
 		{
 			std::unique_lock<std::mutex> lock(mutex_);
 			cv_.wait(lock, [this] {
-				return count_ > 0 || stopped_.load(std::memory_order_acquire);
+				size_t pending = lane_high_.count + lane_normal_.count + lane_low_.count;
+				return pending > 0 || stopped_.load(std::memory_order_acquire);
 			});
 
-			if (stopped_.load(std::memory_order_acquire) && count_ == 0) break;
-			if (count_ == 0) continue;
+			size_t pending = lane_high_.count + lane_normal_.count + lane_low_.count;
+			if (stopped_.load(std::memory_order_acquire) && pending == 0) break;
+			if (pending == 0) continue;
 
-			job = std::move(queue_[head_]);
-			queue_[head_].active = false;
-			head_ = (head_ + 1) % QUEUE_CAPACITY;
-			--count_;
-			if (job.active) {
+			// Weighted round-robin priority dequeue: after 4 consecutive HIGH jobs, serve 1 NORMAL job if available
+			bool dequeued = false;
+			if (high_consecutive_count_ >= 4 && lane_normal_.count > 0) {
+				dequeued = lane_normal_.dequeue(job);
+				if (dequeued) {
+					high_consecutive_count_ = 0;
+				}
+			}
+
+			if (!dequeued) {
+				dequeued = lane_high_.dequeue(job);
+				if (dequeued) {
+					++high_consecutive_count_;
+				}
+			}
+
+			if (!dequeued) {
+				dequeued = lane_normal_.dequeue(job);
+				if (dequeued) {
+					high_consecutive_count_ = 0;
+				}
+			}
+
+			if (!dequeued) {
+				dequeued = lane_low_.dequeue(job);
+				if (dequeued) {
+					high_consecutive_count_ = 0;
+				}
+			}
+
+			if (dequeued && job.active) {
 				++executing_count_;
 			}
 		}
