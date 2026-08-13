@@ -33,9 +33,16 @@ target_link_libraries(multinet PRIVATE godot::cpp)
 # Destination directory in game project
 set(OUTPUT_DIR "D:/Projects/Games/Project-Nations/addons/multinet/bin")
 
+# Godot copies reloadable extensions beside the loaded DLL. The project tree is
+# intentionally read-only for the normal editor process, so keep a second
+# development copy in the user's writable temp directory for hot reload.
+set(HOT_RELOAD_DIR "$ENV{TEMP}/multinet_hotreload")
+
 add_custom_command(TARGET multinet POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${OUTPUT_DIR}"
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:multinet> "${OUTPUT_DIR}/multinet.windows.debug.x86_64.dll"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${HOT_RELOAD_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:multinet> "${HOT_RELOAD_DIR}/multinet.windows.debug.x86_64.dll"
     COMMENT "Copying compiled GDExtension DLL to Project-Nations..."
 )
 
