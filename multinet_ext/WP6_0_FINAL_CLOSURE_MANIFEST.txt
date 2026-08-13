@@ -1,7 +1,7 @@
 WP6.0 FINAL CLOSURE MANIFEST
 ============================
 STATUS: EXACT-CURRENT WP6.0 CLOSURE
-FINAL COMMIT: c6997e495eb3e595bfeb4c5f12dadd5bc3dcccdf
+FINAL SOURCE COMMIT: e8f4e7d41d8ecb394b350a8447156ac6b38e6297
 
 SCOPE
 - Square World OFF -> ON preserves finite canonical area by nearest-metre S=sqrt(X*Z), then X=Z=S.
