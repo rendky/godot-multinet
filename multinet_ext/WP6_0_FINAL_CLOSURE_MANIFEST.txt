@@ -1,0 +1,49 @@
+WP6.0 FINAL CLOSURE MANIFEST
+============================
+STATUS: EXACT-CURRENT WP6.0 CLOSURE
+FINAL COMMIT: e8f4e7d41d8ecb394b350a8447156ac6b38e6297
+
+SCOPE
+- Square World OFF -> ON preserves finite canonical area by nearest-metre S=sqrt(X*Z), then X=Z=S.
+- Finite -> Closed preserves finite aspect history in adapter/editor state; Closed -> Finite restores that aspect using current closed side and canonical metre quantization.
+- Aspect history is not part of WorldDomainInput or canonical domain hashing.
+- No CHP, Terrain generation, BCCM topology, V5 mapping, page identity, normals, or Earth-scale camera-relative renderer changes in this pass.
+
+QUANTIZATION RECEIPT
+- Fixture input: finite 500,000 m x 400,000 m (500 x 400 km).
+- Square side: 447,214 m.
+- Requested area: 200,000,000,000 m2.
+- Actual square area: 200,000,361,796 m2.
+- Area delta: +361,796 m2 (reported, not hidden).
+- Closed side 447,214 m -> finite restoration: 500,000 m x 400,000 m.
+
+BUILD COMMANDS / RESULTS
+- cmd.exe /c build_multinet.bat : EXIT 0; Rule 3 passed; multinet.dll deployed.
+- ninja -C multinet_ext/build/windows-editor -j 1 world_domain_fixture editor_domain_navigation_fixture bccm_flat_normal_fixture canonicalization_fixture bccm_surface_edge_fixture : all five targets built successfully.
+- world_domain_fixture.exe : EXIT 0.
+- editor_domain_navigation_fixture.exe : EXIT 0.
+- bccm_flat_normal_fixture.exe : EXIT 0.
+- canonicalization_fixture.exe : EXIT 0.
+- bccm_surface_edge_fixture.exe : EXIT 0.
+
+RUNTIME WRAP EVIDENCE
+- Scene: res://WP6_RUNTIME_WRAP_EVIDENCE.tscn
+- Command: godot.windows.editor.dev.x86_64.console.exe --path D:/Projects/Games/Project-Nations --headless --log-file multinet_ext/WP6_0_RUNTIME_WRAP_EXACT_CURRENT.txt res://WP6_RUNTIME_WRAP_EVIDENCE.tscn
+- Process exit: 0.
+- Required markers: PRE face=0; actual transition POST face=5 source=0 destination=5 edge=1; WP6_WRAP_EVIDENCE COMPLETE.
+- Exact log: multinet_ext/WP6_0_RUNTIME_WRAP_EXACT_CURRENT.txt
+
+HASHES
+- multinet_ext/src/godot/terrain_adapter.cpp: 101767F86F8B677C56F4248ABC7EF8C2C6469419BEB359E97F8F29E21867F5FC
+- multinet_ext/src/godot/terrain_adapter.h: 87579A52DEAAE23BA98E0F13B2231E28F615302C30932322A9C9173E9DB6F5DB
+- multinet_ext/src/multinet/core/spatial/world_domain.cpp: AFBA8C343DDA12DAE2658DA21E395AF7FEF27286FED0CB17DB72CAB4B6C59703
+- multinet_ext/src/multinet/core/spatial/world_domain.h: 69838540571651FA47FCECA297CE05D637098960AFA55B3F5DC067C90ACF1FC5
+- multinet_ext/src/tests/world_domain_fixture.cpp: 129E708682C7B3D36FAF24E9388F83C347667FAE640631715FD05A3D95D64AAC
+- multinet_ext/src/tests/bccm_flat_normal_fixture.cpp: 95C613952FFF9B0B95A672E810F5E5E96130F30FB5B64AE3FC5065B5BAD6BCBA
+- multinet_ext/WP6_0_RUNTIME_WRAP_EXACT_CURRENT.txt: F96251E3F87E7B642E9B8150547500ACFAAD34C6E4D75BF5D42C20F674165557
+- deployed DLLs (all three copies): EC2801A96C7C0507416C585DD1DBEB62E0A5BFFB9D62D235251F59267085AB8D
+
+BOUNDARIES
+ACTUAL GPU NUMERICAL PARITY: NOT YET TESTED
+CHP: NOT STARTED
+WP6.1: NOT STARTED
