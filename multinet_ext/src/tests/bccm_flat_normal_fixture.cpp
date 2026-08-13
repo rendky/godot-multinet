@@ -1,9 +1,11 @@
 #include "multinet/core/spatial/world_manifests.h"
 #include "multinet/core/spatial/surface_address.h"
+#include "multinet/rendering/terrain/block_clipmap/block_clipmap_shader.h"
 #include "multinet/world/terrain/canonical_terrain_signal.h"
 #include "multinet/world/terrain/finite_canonical_terrain_signal.h"
 #include "multinet/world/terrain/terrain_recipe.h"
 
+#include <bit>
 #include <cmath>
 #include <array>
 #include <cstdlib>
@@ -35,6 +37,12 @@ static SurfaceNormal canonical_normal(const CanonicalTerrainSignalV1& signal, Su
 	const double dv = (h_u - h_d) / (2.0 * step_m);
 	const double len = std::sqrt(du * du + 1.0 + dv * dv);
 	return SurfaceNormal{ static_cast<float>(-du / len), static_cast<float>(1.0 / len), static_cast<float>(-dv / len) };
+}
+
+static float shader_chart_delta(float block_coordinate, float block_size, float plane_offset, float chart_root) {
+	const float block_origin = block_coordinate * block_size;
+	const float presentation_coordinate = block_origin + plane_offset;
+	return presentation_coordinate - chart_root;
 }
 
 static WorldDomainManifest make_domain() {
@@ -105,6 +113,36 @@ int main() {
 	require(normal_distance(canonical_normal(closed_signal, seam_raw, CANONICAL_ANALYTIC_NORMAL_SAMPLE_STEP_M), canonical_normal(closed_signal, seam_alias, CANONICAL_ANALYTIC_NORMAL_SAMPLE_STEP_M)) < 1e-3,
 		"closed seam normal alias mismatch");
 
+	// The outer LODs exposed a millimetre-scale hole when root subtraction was
+	// performed before adding the vertex offset. These pairs are the same shared
+	// vertex reached from the right edge of one block and the left edge of the next.
+	const std::array<std::array<float, 3>, 3> chart_weld_cases{{
+		{{ -9028.7275390625f, 4096.0f, -7.0f }},
+		{{ -5787.9013671875f, 4096.0f, -6.0f }},
+		{{ -45.694129943847656f, 4096.0f, -9.0f }}
+	}};
+	for (const auto& weld_case : chart_weld_cases) {
+		const float root = weld_case[0];
+		const float block_size = weld_case[1];
+		const float left_block = weld_case[2];
+		const float from_left = shader_chart_delta(left_block, block_size, block_size, root);
+		const float from_right = shader_chart_delta(left_block + 1.0f, block_size, 0.0f, root);
+		require(std::bit_cast<uint32_t>(from_left) == std::bit_cast<uint32_t>(from_right),
+			"logical chart shared vertex is not bit-identical across blocks");
+	}
+	const float cross_lod_root = -2029.8021240234375f;
+	const float fine_edge = shader_chart_delta(7.0f, 2048.0f, 2048.0f, cross_lod_root);
+	const float coarse_edge = shader_chart_delta(4.0f, 4096.0f, 0.0f, cross_lod_root);
+	require(std::bit_cast<uint32_t>(fine_edge) == std::bit_cast<uint32_t>(coarse_edge),
+		"logical chart shared vertex is not bit-identical across LODs");
+	const std::string shader_source = multinet::rendering::get_bccm_shader_code_string();
+	require(shader_source.find("return (block_origin_m + plane_m) - multinet_bccm_v5_root_presentation_m;") != std::string::npos,
+		"runtime shader no longer preserves the shared-vertex weld ordering");
+	require(shader_source.find("MODELVIEW_MATRIX = mat4(mat3(VIEW_MATRIX)) * MODEL_MATRIX;") != std::string::npos,
+		"runtime shader no longer keeps editor terrain camera-relative through projection");
+	require(shader_source.find("? logical_height_gradient.x") != std::string::npos,
+		"runtime shader restored the duplicate closed-world height evaluation");
+
 	const double analytic_slope = 0.25;
 	for (const double lod_spacing : { 2.0, 256.0 }) {
 		const double delta_slope = (lod_spacing - (-lod_spacing)) / (2.0 * lod_spacing);
@@ -114,6 +152,8 @@ int main() {
 	std::cout << "lods_qualified=0-7\n";
 	std::cout << "elevation_ranges_qualified=3\n";
 	std::cout << "closed_seam_normal_qualified=1\n";
+	std::cout << "logical_chart_shared_vertex_weld_cases=" << chart_weld_cases.size() << "\n";
+	std::cout << "logical_chart_cross_lod_vertex_weld_cases=1\n";
 	std::cout << "hybrid_physical_slope_qualified=1\n";
 	std::cout << "STATUS: PASSED WITH EVIDENCE\n";
 	return 0;

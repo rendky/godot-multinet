@@ -1243,30 +1243,40 @@ float MultinetBCCMNode3D::get_lacunarity() const {
 void MultinetBCCMNode3D::set_coordinate_wrapping(bool p_enabled) {
 	const auto requested = p_enabled ? Multinet::WorldDomainTopology::ClosedSurfaceSixFace : Multinet::WorldDomainTopology::FiniteRectangle;
 	if (world_domain_input.topology == requested) return;
+	godot::String conversion_message = "OK";
 	if (p_enabled) {
-		uint64_t area = 0;
-		if (world_domain_input.finite.extent_x_m != 0 && world_domain_input.finite.extent_z_m <= (std::numeric_limits<uint64_t>::max)() / world_domain_input.finite.extent_x_m) {
-			area = world_domain_input.finite.extent_x_m * world_domain_input.finite.extent_z_m;
-		}
-		if (area == 0) return;
-		const uint64_t closed_side = static_cast<uint64_t>(std::llround(std::sqrt(static_cast<double>(area))));
-		if (closed_side < MIN_RENDERABLE_CLOSED_SIDE_M) {
+		const Multinet::WorldExtentConversionResult conversion = Multinet::square_extent_preserving_area(
+			world_domain_input.finite.extent_x_m, world_domain_input.finite.extent_z_m);
+		if (!conversion.valid || conversion.extent_x_m < MIN_RENDERABLE_CLOSED_SIDE_M) {
 			domain_validation_message = "Closed wrapping needs an equivalent side of at least 0.079 km for the ordinary 32 m LOD0 block.";
 			return;
 		}
-		world_domain_input.closed_surface.area_equivalent_side_m = closed_side;
+		finite_aspect_history_valid = true;
+		finite_aspect_history_square_world = square_world;
+		finite_aspect_history_x_m = world_domain_input.finite.extent_x_m;
+		finite_aspect_history_z_m = world_domain_input.finite.extent_z_m;
+		world_domain_input.closed_surface.area_equivalent_side_m = conversion.extent_x_m;
+		if (conversion.area_delta_m2 != 0.0L) {
+			conversion_message = "Closed conversion quantized area by " + godot::String::num(static_cast<double>(conversion.area_delta_m2), 3) + " m2.";
+		}
 	} else {
 		const uint64_t side = world_domain_input.closed_surface.area_equivalent_side_m;
 		if (side == 0) return;
-		world_domain_input.finite.extent_x_m = side;
-		world_domain_input.finite.extent_z_m = side;
-		square_world = true;
+		const Multinet::WorldExtentConversionResult conversion = Multinet::finite_extent_from_closed_side(
+			side, finite_aspect_history_x_m, finite_aspect_history_z_m, finite_aspect_history_valid);
+		if (!conversion.valid) return;
+		world_domain_input.finite.extent_x_m = conversion.extent_x_m;
+		world_domain_input.finite.extent_z_m = conversion.extent_z_m;
+		square_world = finite_aspect_history_valid ? finite_aspect_history_square_world : true;
+		if (conversion.area_delta_m2 != 0.0L) {
+			conversion_message = "Finite restoration quantized area by " + godot::String::num(static_cast<double>(conversion.area_delta_m2), 3) + " m2.";
+		}
 	}
 	world_domain_input.topology = requested;
 	domain_rebuild_pending = true;
 	recipe_rebuild_pending = true;
 	source_dirty = true;
-	domain_validation_message = "OK";
+	domain_validation_message = conversion_message;
 	notify_property_list_changed();
 }
 
@@ -1276,6 +1286,19 @@ bool MultinetBCCMNode3D::get_coordinate_wrapping() const {
 
 void MultinetBCCMNode3D::set_square_world(bool p_enabled) {
 	if (square_world == p_enabled) return;
+	if (p_enabled && !get_coordinate_wrapping()) {
+		const Multinet::WorldExtentConversionResult conversion = Multinet::square_extent_preserving_area(
+			world_domain_input.finite.extent_x_m, world_domain_input.finite.extent_z_m);
+		if (!conversion.valid) {
+			domain_validation_message = "Square World conversion requires valid finite dimensions.";
+			return;
+		}
+		world_domain_input.finite.extent_x_m = conversion.extent_x_m;
+		world_domain_input.finite.extent_z_m = conversion.extent_z_m;
+		if (conversion.area_delta_m2 != 0.0L) {
+			domain_validation_message = "Square World quantized area by " + godot::String::num(static_cast<double>(conversion.area_delta_m2), 3) + " m2.";
+		}
+	}
 	square_world = p_enabled;
 	domain_rebuild_pending = true;
 	recipe_rebuild_pending = true;

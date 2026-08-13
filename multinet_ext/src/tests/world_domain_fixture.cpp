@@ -7,6 +7,7 @@
 #include "multinet/world/terrain/outputs/rendering/concrete_terrain_render_source.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <array>
 #include <cstdint>
@@ -41,6 +42,35 @@ int main() {
 	finite_square_input.finite.extent_z_m = 500000;
 	WorldDomainManifest finite_square = build_world_domain_manifest(finite_square_input);
 	require(finite_square.is_valid() && finite_square.canonical_area_m2 == 250000000000ULL, "finite 500x500 area mismatch");
+
+	// WP6.0 editor conversions are canonical whole-metre operations. The
+	// square conversion keeps the requested area within the unavoidable metre
+	// quantization, and aspect history survives a finite/closed round trip.
+	const WorldExtentConversionResult square_conversion = square_extent_preserving_area(500000, 400000);
+	require(square_conversion.valid && square_conversion.extent_x_m == 447214 && square_conversion.extent_z_m == 447214,
+		"500x400 square conversion did not use nearest canonical metre");
+	require(square_conversion.requested_area_m2 == 200000000000ULL && square_conversion.actual_area_m2 == 200000361796ULL,
+		"500x400 square conversion area receipt mismatch");
+	require(std::abs(static_cast<double>(square_conversion.area_delta_m2) - 361796.0) < 1e-12,
+		"500x400 square conversion area delta mismatch");
+	const WorldExtentConversionResult closed_round_trip = finite_extent_from_closed_side(
+		447214, 500000, 400000, true);
+	require(closed_round_trip.valid && closed_round_trip.extent_x_m == 500000 && closed_round_trip.extent_z_m == 400000,
+		"500x400 finite aspect was not restored from closed side");
+	const WorldDomainManifest finite_round_trip = [&] {
+		WorldDomainInput input;
+		input.topology = WorldDomainTopology::FiniteRectangle;
+		input.finite.extent_x_m = closed_round_trip.extent_x_m;
+		input.finite.extent_z_m = closed_round_trip.extent_z_m;
+		return build_world_domain_manifest(input);
+	}();
+		require(finite_round_trip.is_valid() && finite_round_trip.canonical_area_m2 == 200000000000ULL,
+		"500x400 finite round-trip manifest invalid or area changed");
+	const uint64_t finite_hash_before_history = finite_round_trip.domain_manifest_hash;
+	WorldDomainInput finite_history_noise = finite_round_trip.input;
+	finite_history_noise.closed_surface.area_equivalent_side_m = 123456;
+	require(build_world_domain_manifest(finite_history_noise).domain_manifest_hash == finite_hash_before_history,
+		"finite aspect history leaked into canonical domain hash");
 
 	WorldDomainInput inactive_a = finite_input;
 	WorldDomainInput inactive_b = finite_input;
@@ -194,6 +224,23 @@ int main() {
 	require(std::abs((placement_a.local_origin.x + 32.0) - placement_b.local_origin.x) < 1e-6 &&
 		std::abs(placement_a.local_origin.z - placement_b.local_origin.z) < 1e-6,
 		"100 km presentation cells are not exactly edge-adjacent");
+
+	// The saved Earth-scale editor repro lives near +/-4.6 million metres. The
+	// render transforms must remain local there; only culling reconstructs world
+	// space. Otherwise a single-precision view matrix makes every tile jitter.
+	const float saved_view_x = -4596215.0f;
+	const float saved_view_y = 595.3f;
+	const float saved_view_z = -4596362.5f;
+	const float saved_a_x = static_cast<float>(-143632.0 * 32.0 - saved_view_x);
+	const float saved_b_x = static_cast<float>(-143631.0 * 32.0 - saved_view_x);
+	const float saved_a_z = static_cast<float>(-143637.0 * 32.0 - saved_view_z);
+	const float saved_b_z = static_cast<float>(-143637.0 * 32.0 - saved_view_z);
+	require(std::abs(saved_a_x) < 8192.0f && std::abs(saved_a_z) < 8192.0f &&
+		std::abs((0.0f - saved_view_y) + saved_view_y) < 1e-6f,
+		"Earth-scale presentation placement leaked absolute editor coordinates");
+	require(std::bit_cast<uint32_t>(saved_a_x + 32.0f) == std::bit_cast<uint32_t>(saved_b_x) &&
+		std::bit_cast<uint32_t>(saved_a_z) == std::bit_cast<uint32_t>(saved_b_z),
+		"Earth-scale camera-relative blocks lost bit-exact adjacency");
 
 	// Exercise every directed topology edge at every ordinary LOD. A shared
 	// presentation edge must resolve to the same canonical samples even when

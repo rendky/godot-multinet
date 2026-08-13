@@ -13,6 +13,30 @@ enum class FiniteDomainContainment : uint8_t {
 	Interior = 2
 };
 
+// Editor/configuration conversion result. These helpers deliberately do not
+// participate in WorldDomainManifest hashing; they only turn user-facing
+// dimensions into canonical whole-metre extents.
+struct WorldExtentConversionResult {
+	uint64_t extent_x_m{ 0 };
+	uint64_t extent_z_m{ 0 };
+	uint64_t requested_area_m2{ 0 };
+	uint64_t actual_area_m2{ 0 };
+	long double area_delta_m2{ 0.0L };
+	bool valid{ false };
+};
+
+[[nodiscard]] WorldExtentConversionResult square_extent_preserving_area(
+	uint64_t extent_x_m,
+	uint64_t extent_z_m
+) noexcept;
+
+[[nodiscard]] WorldExtentConversionResult finite_extent_from_closed_side(
+	uint64_t closed_side_m,
+	uint64_t prior_extent_x_m,
+	uint64_t prior_extent_z_m,
+	bool has_prior_aspect
+) noexcept;
+
 [[nodiscard]] FiniteDomainContainment classify_finite_position(
 	double u_m,
 	double v_m,

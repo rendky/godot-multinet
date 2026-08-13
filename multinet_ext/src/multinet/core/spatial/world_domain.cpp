@@ -2,8 +2,72 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace Multinet {
+
+namespace {
+	constexpr uint64_t MAX_CANONICAL_EXTENT_M = 0xFFFFFFFFULL;
+
+	[[nodiscard]] bool checked_area(uint64_t x_m, uint64_t z_m, uint64_t& out_area_m2) noexcept {
+		if (x_m == 0 || z_m == 0 || z_m > (std::numeric_limits<uint64_t>::max)() / x_m) return false;
+		out_area_m2 = x_m * z_m;
+		return true;
+	}
+
+	[[nodiscard]] uint64_t round_canonical_metres(long double metres) noexcept {
+		if (!std::isfinite(static_cast<double>(metres)) || metres <= 0.0L ||
+			metres > static_cast<long double>(MAX_CANONICAL_EXTENT_M)) return 0;
+		const long double rounded = std::floor(metres + 0.5L);
+		if (rounded < 1.0L || rounded > static_cast<long double>(MAX_CANONICAL_EXTENT_M)) return 0;
+		return static_cast<uint64_t>(rounded);
+	}
+
+	[[nodiscard]] WorldExtentConversionResult make_result(
+		uint64_t x_m,
+		uint64_t z_m,
+		uint64_t requested_area_m2
+	) noexcept {
+		WorldExtentConversionResult result;
+		result.extent_x_m = x_m;
+		result.extent_z_m = z_m;
+		result.requested_area_m2 = requested_area_m2;
+		if (!checked_area(x_m, z_m, result.actual_area_m2)) return result;
+		result.area_delta_m2 = static_cast<long double>(result.actual_area_m2) -
+			static_cast<long double>(requested_area_m2);
+		result.valid = true;
+		return result;
+	}
+}
+
+WorldExtentConversionResult square_extent_preserving_area(
+	uint64_t extent_x_m,
+	uint64_t extent_z_m
+) noexcept {
+	uint64_t requested_area_m2 = 0;
+	if (!checked_area(extent_x_m, extent_z_m, requested_area_m2)) return {};
+	const uint64_t side_m = round_canonical_metres(std::sqrt(static_cast<long double>(requested_area_m2)));
+	return make_result(side_m, side_m, requested_area_m2);
+}
+
+WorldExtentConversionResult finite_extent_from_closed_side(
+	uint64_t closed_side_m,
+	uint64_t prior_extent_x_m,
+	uint64_t prior_extent_z_m,
+	bool has_prior_aspect
+) noexcept {
+	uint64_t requested_area_m2 = 0;
+	if (!checked_area(closed_side_m, closed_side_m, requested_area_m2)) return {};
+	if (!has_prior_aspect || prior_extent_x_m == 0 || prior_extent_z_m == 0) {
+		return make_result(closed_side_m, closed_side_m, requested_area_m2);
+	}
+	const long double side = static_cast<long double>(closed_side_m);
+	const long double ratio = static_cast<long double>(prior_extent_x_m) /
+		static_cast<long double>(prior_extent_z_m);
+	const uint64_t x_m = round_canonical_metres(side * std::sqrt(ratio));
+	const uint64_t z_m = round_canonical_metres(side / std::sqrt(ratio));
+	return make_result(x_m, z_m, requested_area_m2);
+}
 
 FiniteDomainContainment classify_finite_position(
 	double u_m,

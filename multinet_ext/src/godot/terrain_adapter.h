@@ -89,6 +89,10 @@ private:
 	Multinet::WorldPresentationInput world_presentation_input{};
 	Multinet::WorldPresentationManifest world_presentation_manifest{};
 	bool square_world{ true };
+	bool finite_aspect_history_valid{ false };
+	bool finite_aspect_history_square_world{ false };
+	uint64_t finite_aspect_history_x_m{ 0 };
+	uint64_t finite_aspect_history_z_m{ 0 };
 	bool face_colors_enabled{ true };
 	int closed_flat_coverage_radius_blocks{ 4 };
 	Multinet::WorldScaleManifest manifest;
