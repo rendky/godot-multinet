@@ -613,6 +613,32 @@ void BlockClipmapRenderer::set_diamond_triangulation_enabled(bool enabled) noexc
 #endif
 }
 
+void BlockClipmapRenderer::rebase_frozen_presentation(const godot::Vector3& p_camera_world_position) noexcept {
+#ifndef MULTINET_TEST
+	if (!is_initialized || !has_active_presentation_binding) return;
+	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
+	if (!rs) return;
+	const godot::Vector3 delta = active_view_world_position - p_camera_world_position;
+	if (delta.length_squared() <= 1e-12f) return;
+	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+		LODLevelData& level = levels[lod];
+		if (!level.multimesh_rid.is_valid() || level.last_visible_count == 0) continue;
+		godot::PackedFloat32Array& buffer = multimesh_gpu_buffers[lod][level.submitted_buffer_index];
+		float* values = buffer.ptrw();
+		for (uint32_t i = 0; i < level.last_visible_count; ++i) {
+			const size_t base = static_cast<size_t>(i) * 16u;
+			values[base + 3] += delta.x;
+			values[base + 7] += delta.y;
+			values[base + 11] += delta.z;
+		}
+		rs->multimesh_set_buffer(level.multimesh_rid, buffer);
+	}
+	active_view_world_position = p_camera_world_position;
+#else
+	(void)p_camera_world_position;
+#endif
+}
+
 void BlockClipmapRenderer::initialize_cpu_state_for_test(
 	const Multinet::WorldScaleManifest& scale,
 	const Multinet::TerrainRecipeIdentity& recipe_identity,
@@ -2097,6 +2123,7 @@ void BlockClipmapRenderer::update_with_view(
 
 		rs->multimesh_set_buffer(level.multimesh_rid, gpu_buf);
 		rs->multimesh_set_visible_instances(level.multimesh_rid, vis_count);
+		level.submitted_buffer_index = static_cast<uint8_t>(frame_index);
 		
 		level.last_visible_count = vis_count;
 		level.submitted_visible_count = vis_count;

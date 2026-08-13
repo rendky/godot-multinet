@@ -1017,7 +1017,9 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 				current_cam_state.presentation_origin = editor_observer_state.presentation_origin_world;
 
 				if (bccm_renderer.initialized() && render_source && current_cam_state.frame_epoch > 0) {
-					if (!freeze_update) {
+					if (freeze_update) {
+						bccm_renderer.rebase_frozen_presentation(editor_view_snapshot.world_position);
+					} else {
 						bccm_renderer.update_with_view(
 							editor_view_snapshot.world_position,
 							editor_view_snapshot.frustum,

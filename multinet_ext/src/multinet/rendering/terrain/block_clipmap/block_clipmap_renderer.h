@@ -537,6 +537,7 @@ private:
 		uint32_t last_candidate_count{ 0 };
 		uint32_t last_visible_count{ 0 };
 		uint32_t submitted_visible_count{ 0 };
+		uint8_t submitted_buffer_index{ 0 };
 
 		std::array<TerrainRenderBlockKey, BlockClipmapProfile::MAX_CANDIDATES> diagnostic_candidate_keys{};
 		std::array<VisibleInstanceDiagnostic, BlockClipmapProfile::MAX_CANDIDATES> pending_visible_diagnostics{};
@@ -688,6 +689,11 @@ public:
 		const BCCMSourceExpectation& expectation,
 		Multinet::TerrainRenderSource* terrain_source = nullptr
 	);
+
+	// Freeze keeps the submitted set and page state fixed, but editor camera
+	// movement still needs a relative-origin rebase so the frozen terrain stays
+	// in world space instead of appearing glued to the viewport.
+	void rebase_frozen_presentation(const godot::Vector3& p_camera_world_position) noexcept;
 
 	void update(
 		godot::Camera3D* p_camera,
