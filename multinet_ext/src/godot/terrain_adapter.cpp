@@ -344,6 +344,9 @@ void MultinetBCCMNode3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_face_colors_enabled", "enabled"), &MultinetBCCMNode3D::set_face_colors_enabled);
 	ClassDB::bind_method(D_METHOD("get_face_colors_enabled"), &MultinetBCCMNode3D::get_face_colors_enabled);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "face_colors_enabled"), "set_face_colors_enabled", "get_face_colors_enabled");
+	ClassDB::bind_method(D_METHOD("set_diamond_triangulation_enabled", "enabled"), &MultinetBCCMNode3D::set_diamond_triangulation_enabled);
+	ClassDB::bind_method(D_METHOD("get_diamond_triangulation_enabled"), &MultinetBCCMNode3D::get_diamond_triangulation_enabled);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "diamond_triangulation_enabled"), "set_diamond_triangulation_enabled", "get_diamond_triangulation_enabled");
 
 	ClassDB::bind_method(D_METHOD("set_camera_target", "path"), &MultinetBCCMNode3D::set_camera_target);
 	ClassDB::bind_method(D_METHOD("get_camera_target"), &MultinetBCCMNode3D::get_camera_target);
@@ -1155,6 +1158,16 @@ void MultinetBCCMNode3D::set_face_colors_enabled(bool p_enabled) {
 
 bool MultinetBCCMNode3D::get_face_colors_enabled() const {
 	return face_colors_enabled;
+}
+
+void MultinetBCCMNode3D::set_diamond_triangulation_enabled(bool p_enabled) {
+	if (diamond_triangulation_enabled == p_enabled) return;
+	diamond_triangulation_enabled = p_enabled;
+	bccm_renderer.set_diamond_triangulation_enabled(diamond_triangulation_enabled);
+}
+
+bool MultinetBCCMNode3D::get_diamond_triangulation_enabled() const {
+	return diamond_triangulation_enabled;
 }
 
 void MultinetBCCMNode3D::set_seed(uint32_t p_seed) {

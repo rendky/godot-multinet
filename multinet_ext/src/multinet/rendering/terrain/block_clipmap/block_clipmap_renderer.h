@@ -463,6 +463,7 @@ private:
 	TerrainSourceMode source_mode{ TerrainSourceMode::AnalyticBase };
 	bool analytic_debug_prewarm_pages{ false };
 	bool face_colors_enabled{ true };
+	bool diamond_triangulation_enabled{ true };
 	Multinet::TerrainFallbackBounds fallback_bounds{};
 	Multinet::WorldDomainManifest active_domain{};
 
@@ -479,6 +480,7 @@ private:
 	bool has_bound_logical_chart_root_{ false };
 
 	RenderID master_mesh_rid;
+	RenderID legacy_mesh_rid;
 	BCCMShaderData shader_data;
 
 	struct GpuPageSlot {
@@ -613,7 +615,7 @@ private:
 	uint32_t next_ring_terminal_keys_required{ 0 };
 	uint32_t next_ring_terminal_keys_resident{ 0 };
 
-	godot::RID create_master_block_mesh();
+	godot::RID create_master_block_mesh(bool p_diamond_triangulation);
 
 	// Uploads a zero scalar page to GPU layer 0 for a given LOD.
 	// Called during initialization only.
@@ -727,6 +729,9 @@ public:
 
 	bool get_face_colors_enabled() const noexcept { return face_colors_enabled; }
 	void set_face_colors_enabled(bool enabled) noexcept;
+
+	bool get_diamond_triangulation_enabled() const noexcept { return diamond_triangulation_enabled; }
+	void set_diamond_triangulation_enabled(bool enabled) noexcept;
 
 	const FrameTerrainSubmissionPlan& get_last_submission_plan() const { return last_submission_plan; }
 	const StreamingDiagnosticsSnapshot& get_last_streaming_diagnostics() const { return last_streaming_diagnostics; }

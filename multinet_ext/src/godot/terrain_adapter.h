@@ -94,6 +94,7 @@ private:
 	uint64_t finite_aspect_history_x_m{ 0 };
 	uint64_t finite_aspect_history_z_m{ 0 };
 	bool face_colors_enabled{ true };
+	bool diamond_triangulation_enabled{ true };
 	int closed_flat_coverage_radius_blocks{ 4 };
 	Multinet::WorldScaleManifest manifest;
 	std::unique_ptr<Multinet::ConcreteTerrainRenderSource> render_source;
@@ -193,6 +194,8 @@ public:
 
 	void set_face_colors_enabled(bool p_enabled);
 	bool get_face_colors_enabled() const;
+	void set_diamond_triangulation_enabled(bool p_enabled);
+	bool get_diamond_triangulation_enabled() const;
 
 	void set_frequency(float p_freq);
 	float get_frequency() const;

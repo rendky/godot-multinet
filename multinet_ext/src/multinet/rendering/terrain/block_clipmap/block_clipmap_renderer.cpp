@@ -266,7 +266,7 @@ bool BlockClipmapRenderer::initialize(
 	return initialize(rendering_server, scenario, Multinet::make_compatibility_scale_manifest(domain), expected_recipe, expected_fallback_bounds);
 }
 
-godot::RID BlockClipmapRenderer::create_master_block_mesh() {
+godot::RID BlockClipmapRenderer::create_master_block_mesh(bool p_diamond_triangulation) {
 	godot::PackedVector3Array vertices;
 	godot::PackedVector3Array normals;
 	godot::PackedVector2Array uvs;
@@ -295,12 +295,21 @@ godot::RID BlockClipmapRenderer::create_master_block_mesh() {
 			int v01 = (z + 1) * verts_across + x;
 			int v11 = (z + 1) * verts_across + (x + 1);
 
-			indices.push_back(v00);
-			indices.push_back(v10);
-			indices.push_back(v01);
-			indices.push_back(v10);
-			indices.push_back(v11);
-			indices.push_back(v01);
+			if (p_diamond_triangulation && ((x + z) & 1u) != 0u) {
+				indices.push_back(v00);
+				indices.push_back(v10);
+				indices.push_back(v11);
+				indices.push_back(v00);
+				indices.push_back(v11);
+				indices.push_back(v01);
+			} else {
+				indices.push_back(v00);
+				indices.push_back(v10);
+				indices.push_back(v01);
+				indices.push_back(v10);
+				indices.push_back(v11);
+				indices.push_back(v01);
+			}
 		}
 	}
 
@@ -385,8 +394,13 @@ bool BlockClipmapRenderer::initialize(
 	}
 
 	// --- Master mesh + shader -------------------------------------------------
-	master_mesh_rid = create_master_block_mesh();
+	master_mesh_rid = create_master_block_mesh(true);
 	if (!master_mesh_rid.is_valid()) {
+		cleanup();
+		return false;
+	}
+	legacy_mesh_rid = create_master_block_mesh(false);
+	if (!legacy_mesh_rid.is_valid()) {
 		cleanup();
 		return false;
 	}
@@ -401,6 +415,7 @@ bool BlockClipmapRenderer::initialize(
 	}
 
 	rs->mesh_surface_set_material(master_mesh_rid, 0, shader_data.material_rid);
+	rs->mesh_surface_set_material(legacy_mesh_rid, 0, shader_data.material_rid);
 
 	std::cout << "[Multinet BCCM] INITIALIZED: "
 			  << "Shader RID Valid: " << shader_data.shader_rid.is_valid() << ", "
@@ -433,7 +448,7 @@ bool BlockClipmapRenderer::initialize(
 			false,
 			true  // use_custom_data
 		);
-		rs->multimesh_set_mesh(level.multimesh_rid, master_mesh_rid);
+		rs->multimesh_set_mesh(level.multimesh_rid, diamond_triangulation_enabled ? master_mesh_rid : legacy_mesh_rid);
 		rs->multimesh_set_custom_aabb(
 			level.multimesh_rid,
 			godot::AABB(godot::Vector3(0, 0, 0), godot::Vector3(0.01f, 0.01f, 0.01f))
@@ -583,6 +598,21 @@ void BlockClipmapRenderer::set_face_colors_enabled(bool enabled) noexcept {
 #endif
 }
 
+void BlockClipmapRenderer::set_diamond_triangulation_enabled(bool enabled) noexcept {
+	diamond_triangulation_enabled = enabled;
+#ifndef MULTINET_TEST
+	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
+	if (!rs) return;
+	const godot::RID selected_mesh = diamond_triangulation_enabled ? master_mesh_rid : legacy_mesh_rid;
+	if (!selected_mesh.is_valid()) return;
+	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+		if (levels[lod].multimesh_rid.is_valid()) {
+			rs->multimesh_set_mesh(levels[lod].multimesh_rid, selected_mesh);
+		}
+	}
+#endif
+}
+
 void BlockClipmapRenderer::initialize_cpu_state_for_test(
 	const Multinet::WorldScaleManifest& scale,
 	const Multinet::TerrainRecipeIdentity& recipe_identity,
@@ -670,6 +700,10 @@ void BlockClipmapRenderer::cleanup() {
 	if (master_mesh_rid.is_valid()) {
 		rs->free_rid(master_mesh_rid);
 		master_mesh_rid = godot::RID();
+	}
+	if (legacy_mesh_rid.is_valid()) {
+		rs->free_rid(legacy_mesh_rid);
+		legacy_mesh_rid = godot::RID();
 	}
 
 	if (shader_data.material_rid.is_valid()) {
