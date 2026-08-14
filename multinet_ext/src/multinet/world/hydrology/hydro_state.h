@@ -13,7 +13,7 @@ namespace Multinet {
 // ============================================================================
 
 struct LocalPatchFrame {
-	WorldPosition64 world_origin{};
+	FramePosition64 world_origin{};
 	Vec3f           local_up{ 0.0f, 1.0f, 0.0f };
 	Vec3f           local_east{ 1.0f, 0.0f, 0.0f };
 	Vec3f           local_north{ 0.0f, 0.0f, 1.0f };

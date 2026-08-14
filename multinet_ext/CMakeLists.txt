@@ -54,7 +54,7 @@ add_executable(bccm_surface_edge_fixture EXCLUDE_FROM_ALL src/tests/bccm_surface
 target_compile_definitions(bccm_surface_edge_fixture PRIVATE MULTINET_TEST DEBUG_ENABLED)
 target_link_libraries(bccm_surface_edge_fixture PRIVATE godot::cpp)
 
-foreach(WP6_FIXTURE world_domain_fixture editor_domain_navigation_fixture bccm_flat_normal_fixture canonicalization_fixture)
+foreach(WP6_FIXTURE world_domain_fixture editor_domain_navigation_fixture bccm_flat_normal_fixture canonicalization_fixture surface_scale_transition_fixture)
     add_executable(${WP6_FIXTURE} EXCLUDE_FROM_ALL src/tests/${WP6_FIXTURE}.cpp ${CORE_SOURCES})
     target_compile_definitions(${WP6_FIXTURE} PRIVATE MULTINET_TEST DEBUG_ENABLED)
     target_link_libraries(${WP6_FIXTURE} PRIVATE godot::cpp)

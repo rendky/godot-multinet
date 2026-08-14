@@ -76,8 +76,8 @@ public:
 		r_pkg.seed = p_request.seed;
 		
 		// Local bounds (Origin is center of the building for layout purposes)
-		r_pkg.bounds.position = WorldPosition64{ 0.0, 0.0, 0.0 };
-		r_pkg.bounds.size = WorldPosition64{ p_request.extents_m.x * 2.0, p_request.extents_m.y * 2.0, p_request.extents_m.z * 2.0 };
+		r_pkg.bounds.position = FramePosition64{ 0.0, 0.0, 0.0 };
+		r_pkg.bounds.size = FramePosition64{ p_request.extents_m.x * 2.0, p_request.extents_m.y * 2.0, p_request.extents_m.z * 2.0 };
 		
 		r_pkg.room_count = 0;
 		r_pkg.node_count = 0;
@@ -107,15 +107,15 @@ public:
 			RoomRecord& front = r_pkg.rooms[r_pkg.room_count++];
 			front.room_id = p_request.seed + 1;
 			front.function = RoomFunction::Retail;
-			front.local_bounds.position = WorldPosition64{ -(w - split) * 0.5, 0.0, 0.0 };
-			front.local_bounds.size = WorldPosition64{ split, h, d };
+			front.local_bounds.position = FramePosition64{ -(w - split) * 0.5, 0.0, 0.0 };
+			front.local_bounds.size = FramePosition64{ split, h, d };
 			front.ceiling_height = h;
 			
 			RoomRecord& back = r_pkg.rooms[r_pkg.room_count++];
 			back.room_id = p_request.seed + 2;
 			back.function = RoomFunction::Storage;
-			back.local_bounds.position = WorldPosition64{ split * 0.5, 0.0, 0.0 };
-			back.local_bounds.size = WorldPosition64{ w - split, h, d };
+			back.local_bounds.position = FramePosition64{ split * 0.5, 0.0, 0.0 };
+			back.local_bounds.size = FramePosition64{ w - split, h, d };
 			back.ceiling_height = h;
 			
 			generate_room_nodes(front, r_pkg);
@@ -137,22 +137,22 @@ public:
 			RoomRecord& entry = r_pkg.rooms[r_pkg.room_count++];
 			entry.room_id = p_request.seed + 1;
 			entry.function = RoomFunction::Entry;
-			entry.local_bounds.position = WorldPosition64{ -split_x * 0.5, 0.0, 0.0 };
-			entry.local_bounds.size = WorldPosition64{ split_x, h, d };
+			entry.local_bounds.position = FramePosition64{ -split_x * 0.5, 0.0, 0.0 };
+			entry.local_bounds.size = FramePosition64{ split_x, h, d };
 			entry.ceiling_height = h;
 			
 			RoomRecord& living = r_pkg.rooms[r_pkg.room_count++];
 			living.room_id = p_request.seed + 2;
 			living.function = RoomFunction::Living;
-			living.local_bounds.position = WorldPosition64{ split_x * 0.5, 0.0, -split_z * 0.5 };
-			living.local_bounds.size = WorldPosition64{ split_x, h, split_z };
+			living.local_bounds.position = FramePosition64{ split_x * 0.5, 0.0, -split_z * 0.5 };
+			living.local_bounds.size = FramePosition64{ split_x, h, split_z };
 			living.ceiling_height = h;
 			
 			RoomRecord& sleeping = r_pkg.rooms[r_pkg.room_count++];
 			sleeping.room_id = p_request.seed + 3;
 			sleeping.function = RoomFunction::Sleeping;
-			sleeping.local_bounds.position = WorldPosition64{ split_x * 0.5, 0.0, split_z * 0.5 };
-			sleeping.local_bounds.size = WorldPosition64{ split_x, h, split_z };
+			sleeping.local_bounds.position = FramePosition64{ split_x * 0.5, 0.0, split_z * 0.5 };
+			sleeping.local_bounds.size = FramePosition64{ split_x, h, split_z };
 			sleeping.ceiling_height = h;
 			
 			generate_room_nodes(entry, r_pkg);

@@ -88,12 +88,12 @@ public:
 		}
 	}
 
-	[[nodiscard]] double evaluate_height(const WorldPosition64 &p_pos) const noexcept {
+	[[nodiscard]] double evaluate_height(const FramePosition64 &p_pos) const noexcept {
 		return evaluate_height(p_pos.x, p_pos.z);
 	}
 
 	[[nodiscard]] double evaluate_height(const RegionPosition &p_region_pos) const noexcept {
-		WorldPosition64 w = p_region_pos.to_world();
+		FramePosition64 w = p_region_pos.to_world();
 		return evaluate_height(w.x, w.z);
 	}
 

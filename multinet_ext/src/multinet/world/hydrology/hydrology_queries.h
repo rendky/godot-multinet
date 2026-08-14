@@ -63,7 +63,7 @@ struct CrowdWaterRegionRecord {
 
 struct WaveQueryInput {
 	WaterBodyID     body{ 0 };
-	WorldPosition64 position{};
+	FramePosition64 position{};
 	double          time_s{ 0.0 };
 	uint32_t        quality_lane{ 0 };
 };
@@ -105,8 +105,8 @@ struct WaterSurfaceSample {
 struct ShorelineSegmentRecord {
 	WaterBodyID body{ 0 };
 
-	WorldPosition64 p0{};
-	WorldPosition64 p1{};
+	FramePosition64 p0{};
+	FramePosition64 p1{};
 
 	float mean_water_elevation_m{ 0.0f };
 	float bank_slope{ 0.0f };

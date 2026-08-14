@@ -414,6 +414,15 @@ bool try_advance_domain_surface_frame(
 
 	const double half_extent_m = static_cast<double>(domain.closed_surface.chart_half_extent_mm) * 0.001;
 	if (!(half_extent_m > 0.0) || !std::isfinite(half_extent_m)) return false;
+	// Time comparisons are dimensionless. The final face-boundary check is in
+	// metres and needs a scale-aware skin so FP64 edge landing is not rejected
+	// before the clamp below. Keep the physical tolerance below a centimetre at
+	// all supported scales, so genuine topology errors still fail closed.
+	constexpr double time_epsilon = 1e-10;
+	constexpr double ulp_factor = 8.0;
+	const double boundary_epsilon_m = std::max(
+		1e-9,
+		ulp_factor * std::numeric_limits<double>::epsilon() * std::max(1.0, std::abs(half_extent_m)));
 	SurfaceFrame transported = initial_frame;
 	double u_m = initial_frame.origin.u_m;
 	double v_m = initial_frame.origin.v_m;
@@ -425,7 +434,6 @@ bool try_advance_domain_surface_frame(
 		0.0,
 		initial_frame.tangent_basis.u_axis.z * local_delta.x + initial_frame.tangent_basis.v_axis.z * local_delta.z
 	};
-	constexpr double edge_epsilon = 1e-10;
 	constexpr uint32_t max_crossings = 4096;
 	for (;;) {
 		const double delta_u = transported.tangent_basis.u_axis.x * remaining_flat.x +
@@ -433,16 +441,16 @@ bool try_advance_domain_surface_frame(
 		const double delta_v = transported.tangent_basis.v_axis.x * remaining_flat.x +
 			transported.tangent_basis.v_axis.z * remaining_flat.z;
 		const auto hit_time = [&](double coordinate, double delta) noexcept {
-			if (delta > edge_epsilon) return (half_extent_m - coordinate) / delta;
-			if (delta < -edge_epsilon) return (-half_extent_m - coordinate) / delta;
+			if (delta > time_epsilon) return (half_extent_m - coordinate) / delta;
+			if (delta < -time_epsilon) return (-half_extent_m - coordinate) / delta;
 			return (std::numeric_limits<double>::infinity)();
 		};
 		double u_time = hit_time(u_m, delta_u);
 		double v_time = hit_time(v_m, delta_v);
-		if (u_time < 0.0 && u_time > -edge_epsilon) u_time = 0.0;
-		if (v_time < 0.0 && v_time > -edge_epsilon) v_time = 0.0;
+		if (u_time < 0.0 && u_time > -time_epsilon) u_time = 0.0;
+		if (v_time < 0.0 && v_time > -time_epsilon) v_time = 0.0;
 		const double hit = std::min(u_time, v_time);
-		if (!std::isfinite(hit) || hit >= 1.0 - edge_epsilon) {
+		if (!std::isfinite(hit) || hit >= 1.0 - time_epsilon) {
 			u_m += delta_u;
 			v_m += delta_v;
 			break;
@@ -450,8 +458,8 @@ bool try_advance_domain_surface_frame(
 		if (hit < 0.0 || out_transition_count >= max_crossings) return false;
 		u_m += delta_u * hit;
 		v_m += delta_v * hit;
-		const bool hit_u = std::abs(u_time - hit) <= edge_epsilon;
-		const bool hit_v = std::abs(v_time - hit) <= edge_epsilon;
+		const bool hit_u = std::abs(u_time - hit) <= time_epsilon;
+		const bool hit_v = std::abs(v_time - hit) <= time_epsilon;
 		SurfaceEdge edge = hit_u
 			? (delta_u < 0.0 ? SurfaceEdge::NegativeU : SurfaceEdge::PositiveU)
 			: (delta_v < 0.0 ? SurfaceEdge::NegativeV : SurfaceEdge::PositiveV);
@@ -516,8 +524,8 @@ bool try_advance_domain_surface_frame(
 		if (out_last_destination_face) *out_last_destination_face = static_cast<SurfaceFace>(transition.destination_face);
 		if (out_last_edge) *out_last_edge = edge;
 	}
-	if (u_m < -half_extent_m - edge_epsilon || u_m > half_extent_m + edge_epsilon ||
-		v_m < -half_extent_m - edge_epsilon || v_m > half_extent_m + edge_epsilon) return false;
+	if (u_m < -half_extent_m - boundary_epsilon_m || u_m > half_extent_m + boundary_epsilon_m ||
+		v_m < -half_extent_m - boundary_epsilon_m || v_m > half_extent_m + boundary_epsilon_m) return false;
 	if (!std::isfinite(u_m) || !std::isfinite(v_m)) return false;
 	out_position.face = transported.origin.face;
 	out_position.u_m = std::clamp(u_m, -half_extent_m, half_extent_m);

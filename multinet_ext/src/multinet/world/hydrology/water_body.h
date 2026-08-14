@@ -15,7 +15,7 @@ struct WaterBodyRecord {
 	WaterBodyID   id{ 0 };
 	WaterBodyKind kind{ WaterBodyKind::Lake };
 
-	WorldPosition64 centroid{};
+	FramePosition64 centroid{};
 	AABB64          bounds{};
 
 	double volume_m3{ 0.0 };

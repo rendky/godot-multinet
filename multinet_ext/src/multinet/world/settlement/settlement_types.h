@@ -61,8 +61,8 @@ struct CompoundRecord {
 struct RoadSegmentRecord {
 	RoadSegmentID road_id{ 0 };
 	FeatureKey key{};
-	WorldPosition64 start_pos{};
-	WorldPosition64 end_pos{};
+	FramePosition64 start_pos{};
+	FramePosition64 end_pos{};
 	RoadHierarchy hierarchy{ RoadHierarchy::Footpath };
 	float width_m{ 2.0f };
 };
@@ -70,7 +70,7 @@ struct RoadSegmentRecord {
 struct BuildingDevelopmentRequest {
 	CompoundID compound_id{ 0 };
 	FeatureKey building_key{};
-	WorldPosition64 position{};
+	FramePosition64 position{};
 	Vec3f extents_m{};
 	BuildingProgram program_type{ BuildingProgram::Dwelling };
 	uint32_t seed{ 0 };

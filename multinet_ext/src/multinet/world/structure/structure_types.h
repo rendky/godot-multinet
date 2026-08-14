@@ -110,7 +110,7 @@ struct StructurePortal {
 
 	PortalType type{ PortalType::InteriorDoor };
 
-	WorldPosition64 local_position{};
+	FramePosition64 local_position{};
 
 	float width{ 1.0f };
 	float height{ 2.1f };

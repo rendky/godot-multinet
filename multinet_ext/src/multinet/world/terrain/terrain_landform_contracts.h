@@ -21,7 +21,7 @@ enum class LandformType : uint8_t {
 
 struct LandformConstraint {
 	LandformType type{ LandformType::BuildingPad };
-	WorldPosition64 center{};
+	FramePosition64 center{};
 	Vec3f extents_m{};
 	float target_elevation_m{ 0.0f };
 	uint32_t priority{ 0 };

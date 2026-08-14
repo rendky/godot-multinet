@@ -58,8 +58,8 @@ struct Vec3f {
 };
 
 struct AABB64 {
-	WorldPosition64 position{};
-	WorldPosition64 size{};
+	FramePosition64 position{};
+	FramePosition64 size{};
 
 	[[nodiscard]] constexpr bool operator==(const AABB64 &p_other) const noexcept {
 		return position == p_other.position && size == p_other.size;
@@ -77,7 +77,7 @@ struct RegionPosition {
 	float local_y{ 0.0f };
 	float local_z{ 0.0f };
 
-	static RegionPosition from_world(const WorldPosition64 &p_world) noexcept {
+	static RegionPosition from_world(const FramePosition64 &p_world) noexcept {
 		RegionPosition pos{};
 
 		double cx = std::floor(p_world.x / CELL_SIZE);
@@ -95,8 +95,8 @@ struct RegionPosition {
 		return pos;
 	}
 
-	[[nodiscard]] WorldPosition64 to_world() const noexcept {
-		return WorldPosition64{
+	[[nodiscard]] FramePosition64 to_world() const noexcept {
+		return FramePosition64{
 			static_cast<double>(cell_x) * CELL_SIZE + static_cast<double>(local_x),
 			static_cast<double>(cell_y) * CELL_SIZE + static_cast<double>(local_y),
 			static_cast<double>(cell_z) * CELL_SIZE + static_cast<double>(local_z)

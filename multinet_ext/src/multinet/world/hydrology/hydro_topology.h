@@ -13,7 +13,7 @@ namespace Multinet {
 struct HydroNodeRecord {
 	HydroNodeID     id{ 0 };
 	HydroNodeKind   kind{ HydroNodeKind::Junction };
-	WorldPosition64 centroid{};
+	FramePosition64 centroid{};
 
 	double storage_m3{ 0.0 };
 	double water_surface_elevation_m{ 0.0 };

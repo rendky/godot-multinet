@@ -23,7 +23,7 @@ struct TerrainCheckpointState {
 
 	uint32_t magic{ EXPECTED_MAGIC };
 	TerrainRecipeIdentity identity{};
-	WorldPosition64 player_position{};
+	FramePosition64 player_position{};
 
 	uint32_t region_count{ 0 };
 	RegionVersionRecord region_records[MaxSavedRegions]{};

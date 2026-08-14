@@ -89,7 +89,7 @@ public:
 	[[nodiscard]] static constexpr bool generate_block(
 			uint64_t p_seed,
 			BlockID p_block_id,
-			const WorldPosition64& p_center,
+			const FramePosition64& p_center,
 			const Vec3f& p_extents,
 			BlockGenerationResult& r_result) noexcept {
 				
@@ -97,8 +97,8 @@ public:
 		
 		r_result.block.block_id = p_block_id;
 		r_result.block.key = block_key;
-		r_result.block.bounds.position = WorldPosition64{ p_center.x - p_extents.x, p_center.y, p_center.z - p_extents.z };
-		r_result.block.bounds.size = WorldPosition64{ p_extents.x * 2.0, p_extents.y * 2.0, p_extents.z * 2.0 };
+		r_result.block.bounds.position = FramePosition64{ p_center.x - p_extents.x, p_center.y, p_center.z - p_extents.z };
+		r_result.block.bounds.size = FramePosition64{ p_extents.x * 2.0, p_extents.y * 2.0, p_extents.z * 2.0 };
 		r_result.compound_count = 0;
 		r_result.road_count = 0;
 		
@@ -119,7 +119,7 @@ public:
 			float padding = 2.0f;
 			req.compound_id = comp.compound_id;
 			req.building_key = bldg_key;
-			req.position = WorldPosition64{ 
+			req.position = FramePosition64{
 				comp.bounds.position.x + comp.bounds.size.x * 0.5, 
 				comp.bounds.position.y, 
 				comp.bounds.position.z + comp.bounds.size.z * 0.5 

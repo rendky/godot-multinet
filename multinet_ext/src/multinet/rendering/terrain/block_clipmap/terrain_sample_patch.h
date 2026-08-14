@@ -6,6 +6,7 @@
 #include "multinet/core/spatial/surface_projection.h"
 #include "multinet/core/spatial/world_manifests.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>

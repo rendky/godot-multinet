@@ -87,7 +87,7 @@ void MultinetSettlementNode3D::generate_settlement() {
 	// 1. Generate Block
 	Multinet::SettlementGenerator::BlockGenerationResult result{};
 	Multinet::Vec3f extents = { size_x_m, 0.0f, size_z_m };
-	Multinet::WorldPosition64 center = { 0.0, 0.0, 0.0 };
+	Multinet::FramePosition64 center = { 0.0, 0.0, 0.0 };
 	
 	Multinet::SettlementGenerator::generate_block(seed, block_id, center, extents, result);
 

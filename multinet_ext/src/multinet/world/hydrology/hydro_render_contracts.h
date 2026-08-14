@@ -42,7 +42,7 @@ struct WetSurfaceRenderRecord {
 };
 
 struct FoamSourceRecord {
-	WorldPosition64 position{};
+	FramePosition64 position{};
 	Vec3f           direction{};
 	float           width_m{ 1.0f };
 	float           intensity{ 1.0f };

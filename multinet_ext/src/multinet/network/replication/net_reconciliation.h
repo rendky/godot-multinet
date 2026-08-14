@@ -11,14 +11,14 @@ namespace Multinet {
 struct TransformSnapshotPacket {
 	uint64_t sequence_num{ 0 };
 	uint64_t timestamp_ms{ 0 };
-	WorldPosition64 world_pos{};
+	FramePosition64 world_pos{};
 	QuantizedTransform transform{};
 };
 
 class ClientReconciler {
 private:
 	uint64_t last_server_seq{ 0 };
-	WorldPosition64 last_authoritative_pos{};
+	FramePosition64 last_authoritative_pos{};
 	bool has_received_initial{ false };
 
 public:
@@ -37,7 +37,7 @@ public:
 	}
 
 	// Calculates spatial error delta between client predicted position and server authoritative position
-	[[nodiscard]] double calculate_error_distance(const WorldPosition64 &p_predicted_pos) const noexcept {
+	[[nodiscard]] double calculate_error_distance(const FramePosition64 &p_predicted_pos) const noexcept {
 		if (!has_received_initial) return 0.0;
 
 		double dx = p_predicted_pos.x - last_authoritative_pos.x;
@@ -47,11 +47,11 @@ public:
 	}
 
 	// Smoothly interpolates client position toward server authoritative position
-	[[nodiscard]] WorldPosition64 apply_smooth_correction(const WorldPosition64 &p_client_pos, float p_alpha = 0.2f) const noexcept {
+	[[nodiscard]] FramePosition64 apply_smooth_correction(const FramePosition64 &p_client_pos, float p_alpha = 0.2f) const noexcept {
 		if (!has_received_initial) return p_client_pos;
 
 		double factor = static_cast<double>(p_alpha);
-		return WorldPosition64{
+		return FramePosition64{
 			p_client_pos.x + (last_authoritative_pos.x - p_client_pos.x) * factor,
 			p_client_pos.y + (last_authoritative_pos.y - p_client_pos.y) * factor,
 			p_client_pos.z + (last_authoritative_pos.z - p_client_pos.z) * factor
@@ -59,7 +59,7 @@ public:
 	}
 
 	[[nodiscard]] uint64_t get_last_sequence() const noexcept { return last_server_seq; }
-	[[nodiscard]] const WorldPosition64 &get_authoritative_position() const noexcept { return last_authoritative_pos; }
+	[[nodiscard]] const FramePosition64 &get_authoritative_position() const noexcept { return last_authoritative_pos; }
 };
 
 } // namespace Multinet
