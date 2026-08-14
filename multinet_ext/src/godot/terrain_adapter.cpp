@@ -2081,6 +2081,10 @@ void MultinetBCCMNode3D::publish_editor_view_camera(godot::Camera3D* p_editor_ca
 		restored_transform.origin.z = static_cast<godot::real_t>(
 			static_cast<double>(restored_transform.origin.z) + editor_presentation_rebase_offset_z_m);
 		p_editor_camera->set_global_transform(restored_transform);
+		// Godot may defer the viewport camera's transform cache. Flush it before
+		// extracting the frustum so culling and the mirrored scene camera share the
+		// same restored origin in this frame.
+		p_editor_camera->force_update_transform();
 		editor_presentation_rebase_offset_x_m = 0.0;
 		editor_presentation_rebase_offset_z_m = 0.0;
 	}
@@ -2123,6 +2127,9 @@ void MultinetBCCMNode3D::publish_editor_view_camera(godot::Camera3D* p_editor_ca
 			rebased_transform.origin.x = 0.0f;
 			rebased_transform.origin.z = 0.0f;
 			p_editor_camera->set_global_transform(rebased_transform);
+			// Publish the post-rebase transform immediately; otherwise get_frustum()
+			// can describe the pre-rebase camera for one frame and cull the side rings.
+			p_editor_camera->force_update_transform();
 
 			editor_presentation_rebase_offset_x_m += static_cast<double>(shift.x);
 			editor_presentation_rebase_offset_z_m += static_cast<double>(shift.z);
