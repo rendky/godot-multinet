@@ -79,6 +79,11 @@ private:
 #ifdef DEBUG_ENABLED
 	EditorViewSnapshot editor_view_snapshot;
 	EditorCanonicalObserverState editor_observer_state;
+	double editor_presentation_rebase_offset_x_m{ 0.0 };
+	double editor_presentation_rebase_offset_z_m{ 0.0 };
+	double editor_last_presentation_rebase_x_m{ 0.0 };
+	double editor_last_presentation_rebase_z_m{ 0.0 };
+	uint64_t editor_presentation_rebase_count{ 0 };
 	std::shared_ptr<Multinet::TerrainCommittedDeltaField> debug_held_delta_field;
 	uint32_t debug_publication_version{ 1 };
 #endif

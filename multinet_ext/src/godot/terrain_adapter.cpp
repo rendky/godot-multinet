@@ -79,6 +79,7 @@ namespace godot {
 namespace {
 constexpr double MAX_WORLD_SIDE_KM = 4294967.295; // UINT32_MAX metres, in km.
 constexpr uint64_t MIN_RENDERABLE_CLOSED_SIDE_M = 79;
+constexpr double EDITOR_PRESENTATION_REBASE_THRESHOLD_M = 4096.0;
 
 bool try_km_to_world_metres(double kilometres, uint64_t& out_metres) noexcept {
 	const long double metres = static_cast<long double>(kilometres) * 1000.0L;
@@ -1598,9 +1599,19 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["editor_last_transition_frame_epoch"] = static_cast<int64_t>(editor_observer_state.last_transition_frame_epoch);
 	dict["editor_last_transition_initial_face"] = editor_observer_state.last_transition_initial_face;
 	dict["editor_last_transition_final_face"] = editor_observer_state.last_transition_final_face;
-	dict["editor_view_world_x_m"] = editor_view_snapshot.world_position.x;
+	dict["editor_view_world_x_m"] = editor_presentation_rebase_offset_x_m +
+		static_cast<double>(editor_view_snapshot.world_position.x);
 	dict["editor_view_world_y_m"] = editor_view_snapshot.world_position.y;
-	dict["editor_view_world_z_m"] = editor_view_snapshot.world_position.z;
+	dict["editor_view_world_z_m"] = editor_presentation_rebase_offset_z_m +
+		static_cast<double>(editor_view_snapshot.world_position.z);
+	dict["editor_view_local_x_m"] = editor_view_snapshot.world_position.x;
+	dict["editor_view_local_z_m"] = editor_view_snapshot.world_position.z;
+	dict["editor_presentation_rebase_offset_x_m"] = editor_presentation_rebase_offset_x_m;
+	dict["editor_presentation_rebase_offset_z_m"] = editor_presentation_rebase_offset_z_m;
+	dict["editor_last_presentation_rebase_x_m"] = editor_last_presentation_rebase_x_m;
+	dict["editor_last_presentation_rebase_z_m"] = editor_last_presentation_rebase_z_m;
+	dict["editor_presentation_rebase_count"] = static_cast<int64_t>(editor_presentation_rebase_count);
+	dict["editor_presentation_rebase_threshold_m"] = EDITOR_PRESENTATION_REBASE_THRESHOLD_M;
 	dict["editor_presentation_anchor_x_m"] = current_cam_state.presentation_origin.x;
 	dict["editor_presentation_anchor_z_m"] = current_cam_state.presentation_origin.z;
 	const double editor_presentation_anchor_lag_x_m =
@@ -2058,6 +2069,22 @@ void MultinetBCCMNode3D::publish_editor_view_camera(godot::Camera3D* p_editor_ca
 		return;
 	}
 
+	// Closed presentation uses a floating editor origin. Put the accumulated
+	// flat editor location back when returning to finite mode so the fixed
+	// rectangle remains at the real Godot origin instead of following the view.
+	if (world_domain_manifest.is_finite() && editor_observer_state.initialized &&
+		editor_observer_state.topology != Multinet::WorldDomainTopology::FiniteRectangle &&
+		(editor_presentation_rebase_offset_x_m != 0.0 || editor_presentation_rebase_offset_z_m != 0.0)) {
+		godot::Transform3D restored_transform = p_editor_camera->get_global_transform();
+		restored_transform.origin.x = static_cast<godot::real_t>(
+			static_cast<double>(restored_transform.origin.x) + editor_presentation_rebase_offset_x_m);
+		restored_transform.origin.z = static_cast<godot::real_t>(
+			static_cast<double>(restored_transform.origin.z) + editor_presentation_rebase_offset_z_m);
+		p_editor_camera->set_global_transform(restored_transform);
+		editor_presentation_rebase_offset_x_m = 0.0;
+		editor_presentation_rebase_offset_z_m = 0.0;
+	}
+
 	// Copy position and frustum planes from the actual editor viewport camera.
 	// No Camera3D pointer is retained beyond this function.
 	editor_view_snapshot.world_position = p_editor_camera->get_global_position();
@@ -2077,6 +2104,40 @@ void MultinetBCCMNode3D::publish_editor_view_camera(godot::Camera3D* p_editor_ca
 
 		// The observer update below owns canonical frame identity and epoch.
 		update_editor_observer_from_editor_camera();
+
+		const double local_x_m = static_cast<double>(editor_view_snapshot.world_position.x);
+		const double local_z_m = static_cast<double>(editor_view_snapshot.world_position.z);
+		if (!world_domain_manifest.is_finite() && editor_observer_state.valid &&
+			(std::abs(local_x_m) >= EDITOR_PRESENTATION_REBASE_THRESHOLD_M ||
+			 std::abs(local_z_m) >= EDITOR_PRESENTATION_REBASE_THRESHOLD_M)) {
+			// Consume the real movement above, then recenter only the float-backed
+			// Godot presentation. Canonical position, frame identity, and page keys
+			// do not change. At Earth-scale coordinates this recovers sub-millimetre
+			// local input instead of dropping slow WASD deltas to float rounding.
+			godot::Transform3D rebased_transform = p_editor_camera->get_global_transform();
+			const godot::Vector3 shift{
+				rebased_transform.origin.x,
+				0.0f,
+				rebased_transform.origin.z
+			};
+			rebased_transform.origin.x = 0.0f;
+			rebased_transform.origin.z = 0.0f;
+			p_editor_camera->set_global_transform(rebased_transform);
+
+			editor_presentation_rebase_offset_x_m += static_cast<double>(shift.x);
+			editor_presentation_rebase_offset_z_m += static_cast<double>(shift.z);
+			editor_last_presentation_rebase_x_m = static_cast<double>(shift.x);
+			editor_last_presentation_rebase_z_m = static_cast<double>(shift.z);
+			++editor_presentation_rebase_count;
+
+			editor_view_snapshot.world_position -= shift;
+			editor_observer_state.last_editor_camera_world_position -= shift;
+			editor_observer_state.presentation_origin_world -= shift;
+			editor_observer_state.unfolding_root_presentation_x_m -= static_cast<double>(shift.x);
+			editor_observer_state.unfolding_root_presentation_z_m -= static_cast<double>(shift.z);
+			editor_view_snapshot.frustum = multinet::rendering::FrustumPlanes::extract_from_camera(p_editor_camera);
+			editor_view_snapshot.valid = editor_view_snapshot.frustum.valid;
+		}
 	}
 }
 #endif
