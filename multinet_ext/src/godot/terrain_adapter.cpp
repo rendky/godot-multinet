@@ -2114,18 +2114,33 @@ void MultinetBCCMNode3D::publish_editor_view_camera(godot::Camera3D* p_editor_ca
 		if (!world_domain_manifest.is_finite() && editor_observer_state.valid &&
 			(std::abs(local_x_m) >= EDITOR_PRESENTATION_REBASE_THRESHOLD_M ||
 			 std::abs(local_z_m) >= EDITOR_PRESENTATION_REBASE_THRESHOLD_M)) {
-			// Consume the real movement above, then recenter only the float-backed
-			// Godot presentation. Canonical position, frame identity, and page keys
-			// do not change. At Earth-scale coordinates this recovers sub-millimetre
-			// local input instead of dropping slow WASD deltas to float rounding.
+			// Consume only whole outer-ring lattice periods. Re-centering by an
+			// arbitrary camera offset changes every presentation block index (for
+			// example 4,200 m -> 0 m), which makes the old and new ring sets overlap
+			// while the GPU submission is in flight. 4,096 m is the LOD7 block size
+			// for the standard profile and is an integer multiple of every finer LOD.
+			// Canonical position, frame identity, and page keys remain authoritative.
 			godot::Transform3D rebased_transform = p_editor_camera->get_global_transform();
-			const godot::Vector3 shift{
-				rebased_transform.origin.x,
-				0.0f,
-				rebased_transform.origin.z
+			const auto quantized_rebase_shift = [](double local_m) {
+				if (local_m >= EDITOR_PRESENTATION_REBASE_THRESHOLD_M) {
+					return std::floor(local_m / EDITOR_PRESENTATION_REBASE_THRESHOLD_M) *
+						EDITOR_PRESENTATION_REBASE_THRESHOLD_M;
+				}
+				if (local_m <= -EDITOR_PRESENTATION_REBASE_THRESHOLD_M) {
+					return std::ceil(local_m / EDITOR_PRESENTATION_REBASE_THRESHOLD_M) *
+						EDITOR_PRESENTATION_REBASE_THRESHOLD_M;
+				}
+				return 0.0;
 			};
-			rebased_transform.origin.x = 0.0f;
-			rebased_transform.origin.z = 0.0f;
+			const double shift_x_m = quantized_rebase_shift(local_x_m);
+			const double shift_z_m = quantized_rebase_shift(local_z_m);
+			const godot::Vector3 shift{
+				static_cast<godot::real_t>(shift_x_m),
+				0.0f,
+				static_cast<godot::real_t>(shift_z_m)
+			};
+			rebased_transform.origin.x -= static_cast<godot::real_t>(shift_x_m);
+			rebased_transform.origin.z -= static_cast<godot::real_t>(shift_z_m);
 			p_editor_camera->set_global_transform(rebased_transform);
 			// Publish the post-rebase transform immediately; otherwise get_frustum()
 			// can describe the pre-rebase camera for one frame and cull the side rings.
