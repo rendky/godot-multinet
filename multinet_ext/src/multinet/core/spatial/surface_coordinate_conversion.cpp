@@ -138,13 +138,6 @@ namespace Multinet {
         return true;
     }
 
-    SurfaceEdge cross_edge;
-    if (u_exceeds) {
-        cross_edge = (u_coord < -H) ? SurfaceEdge::NegativeU : SurfaceEdge::PositiveU;
-    } else {
-        cross_edge = (v_coord < -H) ? SurfaceEdge::NegativeV : SurfaceEdge::PositiveV;
-    }
-
     SurfaceAddress addr;
     addr.face = frame.origin.face;
     addr.u_mm = static_cast<int64_t>(std::rint(u_coord * 1000.0));
@@ -419,6 +412,8 @@ bool try_advance_domain_surface_frame(
 	// before the clamp below. Keep the physical tolerance below a centimetre at
 	// all supported scales, so genuine topology errors still fail closed.
 	constexpr double time_epsilon = 1e-10;
+	// The hit-time numerator uses this separate metre-space movement cutoff.
+	constexpr double movement_epsilon_m = 1e-10;
 	constexpr double ulp_factor = 8.0;
 	const double boundary_epsilon_m = std::max(
 		1e-9,
@@ -441,8 +436,8 @@ bool try_advance_domain_surface_frame(
 		const double delta_v = transported.tangent_basis.v_axis.x * remaining_flat.x +
 			transported.tangent_basis.v_axis.z * remaining_flat.z;
 		const auto hit_time = [&](double coordinate, double delta) noexcept {
-			if (delta > time_epsilon) return (half_extent_m - coordinate) / delta;
-			if (delta < -time_epsilon) return (-half_extent_m - coordinate) / delta;
+			if (delta > movement_epsilon_m) return (half_extent_m - coordinate) / delta;
+			if (delta < -movement_epsilon_m) return (-half_extent_m - coordinate) / delta;
 			return (std::numeric_limits<double>::infinity)();
 		};
 		double u_time = hit_time(u_m, delta_u);
