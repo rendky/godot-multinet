@@ -1,0 +1,41 @@
+WP6 SCALE-TRANSITION STABILIZATION — EXACT CURRENT MANIFEST
+============================================================
+STATUS: IMPLEMENTED / UNDER VALIDATION
+COMMIT: d68bea0fcd (fix scale-sensitive surface transitions)
+
+SCOPE
+- Split dimensionless transition-time epsilon from scale-aware metre-space boundary tolerance in surface_coordinate_conversion.cpp.
+- Added a scale regression fixture without changing transition topology, BCCM, V5 mapping, page identity, normals, or CHP.
+- Added direct <algorithm> ownership to terrain_sample_patch.h.
+- Replaced clear internal WorldPosition64 compatibility-alias uses with FramePosition64; retained the alias for external compatibility.
+- Updated current scale/status notes while preserving historical evidence and roadmap records.
+
+NUMERICAL CORRECTION
+- time_epsilon remains dimensionless and controls hit-time comparisons.
+- boundary_epsilon_m = max(1e-9 m, 8 * DBL_EPSILON * max(1 m, abs(half_extent_m))).
+- A floating-point skin at the boundary is clamped; a genuine 1 cm overshoot is rejected by the fixture.
+
+REGRESSION MATRIX
+- Fixture: multinet_ext/src/tests/surface_scale_transition_fixture.cpp
+- Scales: 2 km, 100 km, 5,000 km, 10,000 km, 22,570 km, 25,000 km, 1,234.567 km, 9,876.543 km.
+- Results: scales_tested=8; edge_cases=192; reverse_cases=192; diagonal_cases=48; corner_aliases=192; STATUS: PASSED WITH EVIDENCE.
+
+BUILD / FIXTURES
+- Ninja command: ninja -C multinet_ext/build/windows-editor -j 1 world_domain_fixture editor_domain_navigation_fixture bccm_flat_normal_fixture canonicalization_fixture bccm_surface_edge_fixture surface_scale_transition_fixture
+- Result: all six targets built successfully.
+- All six executables exited 0. The existing BCCM fixture also passed page identity, deformation, edge/corner continuity, CPU/FP32-reference parity, and WP5.2 gates.
+
+DEPLOYED DLL
+- Build/deployed/hot-reload copies all match SHA-256 BC733563F3806CCA02B75531667659D5934F7549FA7067A2BBEFF3238E0D3A75.
+
+RUNTIME WRAP RECEIPT
+- Scene: res://WP6_RUNTIME_WRAP_EVIDENCE.tscn
+- Command: godot.windows.editor.dev.x86_64.console.exe --path D:/Projects/Games/Project-Nations --headless --log-file multinet_ext/WP6_0_RUNTIME_WRAP_EXACT_CURRENT_20260814.txt res://WP6_RUNTIME_WRAP_EVIDENCE.tscn
+- Result: process exit 0; PRE face=0; actual POST face=5 source=0 destination=5 edge=1; WP6_WRAP_EVIDENCE COMPLETE.
+- Log SHA-256: 3925E048B570BBF4415C57B57590E0D984975A9D2C7D19A4896B70440F988F3B.
+
+BOUNDARIES
+ACTUAL GPU NUMERICAL PARITY: NOT YET TESTED
+CHP: NOT STARTED
+WP6.1: NOT STARTED
+Full rendered/hardware qualification remains open.
