@@ -89,7 +89,7 @@ bool try_resolve_curved_horizon_profile(
 	}
 
 	const ErrorMeasurement final_measurement = measure(requested, radius_m, certified_theta);
-	if (!final_measurement.valid) return false;
+	if (!within_budget(final_measurement, requested)) return false;
 	out_profile.requested = requested;
 	out_profile.radius_m = radius_m;
 	out_profile.inverse_radius = 1.0 / radius_m;

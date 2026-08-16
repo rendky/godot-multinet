@@ -1561,7 +1561,8 @@ godot::String MultinetBCCMNode3D::get_chp_status() const {
 	if (world_presentation_input.chp_enabled && !resolved_chp_profile.is_valid()) {
 		return "CPU CONTRACT INVALID / GPU INTEGRATION NOT STARTED";
 	}
-	return "CPU CONTRACT READY / GPU INTEGRATION NOT STARTED";
+	if (!current_chp_view.is_valid()) return "CPU PROFILE READY / CAMERA VIEW NOT READY / GPU INTEGRATION NOT STARTED";
+	return "CPU VIEW READY / GPU INTEGRATION NOT STARTED";
 }
 
 void MultinetBCCMNode3D::set_camera_target(const godot::NodePath& p_path) { camera_target = p_path; }
@@ -1598,6 +1599,7 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["chp_cpu_contract_valid"] = world_presentation_input.chp_enabled
 		? resolved_chp_profile.is_valid()
 		: world_presentation_manifest.is_valid();
+	dict["chp_cpu_view_valid"] = current_chp_view.is_valid();
 	dict["chp_gpu_effective"] = false;
 	dict["chp_implementation_state"] = get_chp_status();
 	dict["chp_radius_policy"] = static_cast<int>(world_presentation_manifest.chp_radius_policy);

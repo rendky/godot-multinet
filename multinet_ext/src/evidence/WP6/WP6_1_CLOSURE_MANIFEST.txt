@@ -1,23 +1,28 @@
 WP6.1 CURVED HORIZON PRESENTATION — CPU-ONLY CLOSURE MANIFEST
 Run date: 2026-08-16
-Status: IMPLEMENTED / UNDER VALIDATION
+Status: IMPLEMENTED / UNDER VALIDATION, final correction receipts complete
 Implementation/evidence commit: 0bdd9c364d (signed)
 
 PACKAGE
-Engine-neutral CPU CHP profile, kernel, exact-sphere reference, certification, immutable view, manifest normalization, adapter diagnostics, and fixture coverage.
+Engine-neutral CPU CHP profile, kernel, exact-sphere reference, certification, immutable view, manifest normalization, adapter diagnostics, fixture coverage, and certified-envelope enforcement.
+Complete CHP source inventory: multinet_ext/src/multinet/rendering/chp/chp_profile.h, chp_view.h, chp_view.cpp, chp_kernel.h, chp_kernel.cpp, chp_certification.h, chp_certification.cpp.
+Exact build inputs: multinet_ext/CMakeLists.txt, multinet_ext/src/tests/chp_cpu_reference_fixture.cpp, multinet_ext/src/tests/world_domain_fixture.cpp, and the bounded adapter/manifest changes listed in WP6_1_SOURCE_HASHES.txt.
 
 EXACT-CURRENT VALIDATION
 - Root build: PASS, exit 0; Rule 3 scanned 46 files; no compiler warnings.
 - Six native fixtures: PASS, exit 0 each.
+- Certified-envelope cases: PASS for every radius/function class; 0.999x, exact, and nextafter accepted; 1.001x and 1.01x rejected.
+- Final certification budget recheck: PASS before every resolved profile publication.
+- CPU-view diagnostic validity: exposed as `chp_cpu_view_valid`; status distinguishes profile-ready from camera-view-ready.
 - CHP CPU reference receipt: multinet_ext/src/evidence/WP6/WP6_1_CHP_CPU_REFERENCE.txt
 - Rendered Vulkan smoke: PASS on elevated rerun, exit 0; see WP6_1_REGRESSION_RECEIPT.txt.
 - Source/deployment hashes: WP6_1_SOURCE_HASHES.txt.
 
 EVIDENCE HASHES
-multinet_ext/src/evidence/WP6/WP6_1_CHP_CPU_REFERENCE.txt: 413B1879D71B203F2077DDB61DDD78C4F7077C2E326C4B84D1D9F145E43ADAD8
-multinet_ext/src/evidence/WP6/WP6_1_CHP_MANIFEST.txt: 0837599E79F6CCCC8859BDB4EA7E38D4F162E74DAE9D1B10EFA66C97D651EA3D
-multinet_ext/src/evidence/WP6/WP6_1_REGRESSION_RECEIPT.txt: AAFC5C2B3F6496E9DCBAF49F92084F876E9C3A112FFB701C1246EBB10B740D94
-multinet_ext/src/evidence/WP6/WP6_1_SOURCE_HASHES.txt: A42C7349CF08FD98E8496B41112608ACD3E06E815AB43DFF436D8800E0B64F49
+multinet_ext/src/evidence/WP6/WP6_1_CHP_CPU_REFERENCE.txt: 1E0A780BB8DA912F30759319D361447F5C36919ABD5D065DEF87838254B95CC8
+multinet_ext/src/evidence/WP6/WP6_1_CHP_MANIFEST.txt: CDB4795D62DE6D60B56A7F9995BEA4FC8D45E718DDBDEDA6648D4D46E92ED16E
+multinet_ext/src/evidence/WP6/WP6_1_REGRESSION_RECEIPT.txt: EBFC8243CB3E5FA4424A3D7A1A9A8441BD71BEBAF8DD8A9E3D96F8BA4721EAA4
+multinet_ext/src/evidence/WP6/WP6_1_SOURCE_HASHES.txt: 69CED573B3BE248CFD960F6D8E2AC3CA5F23C5EDBED3F6032B1959D76C5B22C1
 The closure manifest omits its own self-hash to avoid a circular manifest update.
 
 SOURCE BOUNDARY
@@ -33,4 +38,4 @@ Full hardware qualification: NOT PROVEN
 NEXT PACKAGE
 WP6.2 — GPU/BCCM CHP integration, only after external review of this CPU contract.
 
-This manifest is the exact-current source/evidence receipt for implementation commit 0bdd9c364d. The metadata update that records this identifier is intentionally separate; this file deliberately omits a self-hash.
+This manifest is the exact-current source/evidence receipt for the correction commit to be recorded after the bounded validation pass. It deliberately omits a self-hash.

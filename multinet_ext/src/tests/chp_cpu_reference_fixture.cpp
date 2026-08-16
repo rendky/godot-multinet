@@ -163,13 +163,18 @@ int main() {
 	const CHPIntrinsicSample flat_sample{ 321.0, -654.0, 1234.0, 0.25, -0.5 };
 	CHPEvaluation flat{};
 	require(try_evaluate_flat(flat_sample, flat) && finite_evaluation(flat), "flat CPU evaluation failed");
+	const Vec3d expected_flat_base{ 321.0, 0.0, -654.0 };
+	const Vec3d expected_flat_position{ 321.0, 1234.0, -654.0 };
+	const double max_flat_identity_position_error = std::max(
+		vector_distance(flat.base_position_m, expected_flat_base),
+		vector_distance(flat.position_m, expected_flat_position));
 	const double flat_normal_length = std::sqrt(1.0 + flat_sample.height_dx * flat_sample.height_dx + flat_sample.height_dz * flat_sample.height_dz);
-	require(flat.base_position_m == Vec3d{ 321.0, 0.0, -654.0 } &&
-		flat.position_m == Vec3d{ 321.0, 1234.0, -654.0 } &&
+	require(max_flat_identity_position_error == 0.0 &&
 		std::abs(flat.normal.x + flat_sample.height_dx / flat_normal_length) < 1.0e-12 &&
 		std::abs(flat.normal.y - 1.0 / flat_normal_length) < 1.0e-12 &&
 		std::abs(flat.normal.z + flat_sample.height_dz / flat_normal_length) < 1.0e-12,
 		"flat CPU identity or normal law changed");
+	std::cout << "max_flat_identity_position_error_m=" << max_flat_identity_position_error << "\n";
 	std::cout << "[PASS] CHP-FLAT-CPU-PARITY-01\n";
 
 	const std::array<WorldPresentationManifest, 5> presentations{
@@ -205,6 +210,27 @@ int main() {
 			std::cout << "certified_distance_km=" << radius_m / 1000.0 << ":" << get_function_class_name(function_class)
 				<< ":" << resolved.certified_maximum_deformation_distance_m / 1000.0
 				<< ":clamped=" << (resolved.distance_was_clamped ? 1 : 0) << "\n";
+			auto evaluate_at_distance = [&](double distance) {
+				CHPEvaluation evaluation{};
+				return try_evaluate_curved(resolved, { distance, 0.0, 0.0, 0.0, 0.0 }, evaluation) && finite_evaluation(evaluation);
+			};
+			const double certified_limit = resolved.certified_maximum_deformation_distance_m;
+			const bool envelope_below = evaluate_at_distance(certified_limit * 0.999);
+			const bool envelope_exact = evaluate_at_distance(certified_limit);
+			const double next_boundary = std::nextafter(certified_limit, std::numeric_limits<double>::infinity());
+			const bool envelope_next_first = evaluate_at_distance(next_boundary);
+			const bool envelope_next_second = evaluate_at_distance(next_boundary);
+			const bool envelope_over_001 = evaluate_at_distance(certified_limit * 1.001);
+			const bool envelope_over_01 = evaluate_at_distance(certified_limit * 1.01);
+			require(envelope_below && envelope_exact && envelope_next_first == envelope_next_second &&
+				envelope_next_first && !envelope_over_001 && !envelope_over_01,
+				"certification envelope acceptance/rejection boundary is incorrect");
+			std::cout << "certification_envelope_km=" << radius_m / 1000.0 << ":" << get_function_class_name(function_class)
+				<< ":0.999=" << (envelope_below ? "accepted" : "rejected")
+				<< ":exact=" << (envelope_exact ? "accepted" : "rejected")
+				<< ":nextafter=" << (envelope_next_first ? "accepted" : "rejected")
+				<< ":1.001=" << (envelope_over_001 ? "accepted" : "rejected")
+				<< ":1.01=" << (envelope_over_01 ? "accepted" : "rejected") << "\n";
 			const std::array<double, 5> distance_fractions{ 0.0, 0.1, 0.5, 0.9, 1.0 };
 			for (const auto& direction : directions) {
 				for (const double fraction : distance_fractions) {
@@ -236,8 +262,8 @@ int main() {
 		}
 	}
 	require(std::isfinite(max_poly4_position_error) && std::isfinite(max_poly6_position_error), "polynomial error maxima invalid");
-	std::cout << "max_poly4_exact_position_error_m=" << max_poly4_position_error << "\n";
-	std::cout << "max_poly6_exact_position_error_m=" << max_poly6_position_error << "\n";
+	std::cout << "max_poly4_exact_base_position_error_m=" << max_poly4_position_error << "\n";
+	std::cout << "max_poly6_exact_base_position_error_m=" << max_poly6_position_error << "\n";
 	std::cout << "[PASS] CHP-QUADRATIC-REFERENCE-01\n";
 	std::cout << "[PASS] CHP-POLY4-REFERENCE-01\n";
 	std::cout << "[PASS] CHP-POLY6-REFERENCE-01\n";
@@ -306,6 +332,7 @@ int main() {
 		scaled.radius_m *= scale;
 		scaled.inverse_radius /= scale;
 		scaled.inverse_radius_squared /= scale * scale;
+		scaled.certified_maximum_deformation_distance_m *= scale;
 		CHPEvaluation scaled_eval{};
 		require(try_evaluate_curved(scaled, { 100.0 * scale, 200.0 * scale, 0.0, 0.0, 0.0 }, scaled_eval), "scaled covariance evaluation failed");
 		require(vector_distance(

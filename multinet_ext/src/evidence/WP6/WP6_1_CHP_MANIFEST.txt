@@ -16,9 +16,14 @@ FIXTURE COVERAGE
 - Full analytic Jacobian normal check: PASS; max angular error 2.10734e-08 rad.
 - LOS and surface-arc horizon metrics: PASS; both reported errors 0 m.
 - Domain independence, rotational symmetry, scale covariance, error handling, and profile certification: PASS.
+- Production evaluator envelope enforcement: PASS for every function class and radius case; 0.999x, exact, and one-nextafter-boundary accepted; 1.001x and 1.01x rejected.
+- Final certification publication budget recheck: PASS; profiles publish only when both configured final error budgets remain satisfied.
+- Flat identity maximum position error: 0 m.
+- Poly4 maximum exact base-position error: 1 m.
+- Poly6 maximum exact base-position error: 1 m.
 
 IMPLEMENTATION BOUNDARY
-CHP is exposed as a CPU contract and diagnostic state only. The adapter reports `chp_effective=false`; no shader uniform, BCCM renderer, terrain generation, topology, V5 mapping, page identity, normals, projection, or surface-coordinate conversion was changed.
+CHP is exposed as a CPU contract and diagnostic state only. The adapter reports `chp_effective=false`; diagnostics now expose `chp_cpu_view_valid` and report a camera-view-not-ready state when only the manifest/profile is valid. No shader uniform, BCCM renderer, terrain generation, topology, V5 mapping, page identity, normals, projection, or surface-coordinate conversion was changed.
 
 UNPROVEN GATES
 ACTUAL GPU NUMERICAL PARITY: NOT YET TESTED

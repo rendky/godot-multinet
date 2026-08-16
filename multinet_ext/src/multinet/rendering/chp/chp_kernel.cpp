@@ -10,6 +10,11 @@ namespace {
 
 constexpr double PI = 3.141592653589793238462643383279502884;
 constexpr double HALF_PI = PI * 0.5;
+// The certification fields are computed from the same sample radius, but the
+// three equivalent forms can round in different directions at the boundary.
+// This tolerance absorbs that representation noise without turning a real
+// out-of-envelope sample into an in-range sample.
+constexpr double CERTIFIED_ENVELOPE_RELATIVE_TOLERANCE = 1.0e-12;
 
 [[nodiscard]] bool finite_sample(const CHPIntrinsicSample& sample) noexcept {
 	return std::isfinite(sample.x_m) && std::isfinite(sample.z_m) &&
@@ -18,6 +23,12 @@ constexpr double HALF_PI = PI * 0.5;
 
 [[nodiscard]] bool finite_vec(const Multinet::Vec3d& value) noexcept {
 	return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+[[nodiscard]] bool within_certified_envelope(double value, double limit) noexcept {
+	if (!std::isfinite(value) || !std::isfinite(limit) || value < 0.0 || limit < 0.0) return false;
+	const double scale = std::max(1.0, std::max(std::abs(value), std::abs(limit)));
+	return value <= limit + CERTIFIED_ENVELOPE_RELATIVE_TOLERANCE * scale;
 }
 
 [[nodiscard]] double dot(const Multinet::Vec3d& a, const Multinet::Vec3d& b) noexcept {
@@ -165,9 +176,13 @@ bool try_evaluate_curved(
 	const double x = sample.x_m;
 	const double z = sample.z_m;
 	const double d2 = x * x + z * z;
+	const double distance = std::sqrt(d2);
 	const double u = d2 * profile.inverse_radius_squared;
-	const double theta = std::sqrt(u);
-	if (!std::isfinite(d2) || !std::isfinite(u) || !std::isfinite(theta) || theta >= HALF_PI) return false;
+	const double theta = distance * profile.inverse_radius;
+	if (!std::isfinite(d2) || !std::isfinite(distance) || !std::isfinite(u) || !std::isfinite(theta) || theta >= HALF_PI) return false;
+	if (!within_certified_envelope(distance, profile.certified_maximum_deformation_distance_m) ||
+		!within_certified_envelope(theta, profile.certified_maximum_theta) ||
+		!within_certified_envelope(u, profile.certified_maximum_u)) return false;
 
 	if (profile.requested.function_class == CHPFunctionClass::QuadraticVerticalFallback) {
 		const double drop = d2 * 0.5 * profile.inverse_radius;

@@ -4,11 +4,12 @@ Run date: 2026-08-16
 ROOT BUILD
 Command: D:\Engines\Custom\godot-multinet\build_multinet.bat
 Result: exit code 0
-Rule 3: scanned 46 files; DLL linked and deployed; no compiler warnings after the [[nodiscard]] handling cleanup.
+Rule 3: scanned 46 files; DLL linked and deployed; no compiler warnings after the envelope/diagnostic correction.
 
 EXPLICIT FIXTURE BUILD
-Command: elevated VS developer environment invoking Ninja for world_domain_fixture editor_domain_navigation_fixture bccm_flat_normal_fixture canonicalization_fixture bccm_surface_edge_fixture chp_cpu_reference_fixture
+Command: call D:\VS\2022ce\Common7\Tools\VsDevCmd.bat -arch=x64, then elevated Ninja for world_domain_fixture editor_domain_navigation_fixture bccm_flat_normal_fixture canonicalization_fixture bccm_surface_edge_fixture chp_cpu_reference_fixture
 Result: exit code 0
+The direct Ninja preflight without the VS environment failed only because rc.exe was unavailable; the required VS-environment rerun linked all six targets successfully.
 
 FIXTURE RUNS
 world_domain_fixture: exit 0
@@ -17,6 +18,23 @@ bccm_flat_normal_fixture: exit 0
 canonicalization_fixture: exit 0
 bccm_surface_edge_fixture: exit 0
 chp_cpu_reference_fixture: exit 0
+
+CHP CORRECTION OUTPUT MARKERS
+max_flat_identity_position_error_m=0
+max_poly4_exact_base_position_error_m=1
+max_poly6_exact_base_position_error_m=1
+max_jacobian_normal_angular_error_rad=2.10734e-08
+horizon_los_error_m=0
+horizon_surface_arc_error_m=0
+certification_envelope cases: every radius/function class accepted 0.999x, exact, and nextafter boundary; rejected 1.001x and 1.01x.
+Full exact CHP output: WP6_1_CHP_CPU_REFERENCE.txt.
+
+OTHER FIXTURE OUTPUT MARKERS
+world_domain_fixture: STATUS: PASSED WITH EVIDENCE; presentation_shared_edges_all_faces_lods=192; presentation_multiwrap_2km=1.
+editor_domain_navigation_fixture: STATUS: PASSED WITH EVIDENCE; closed_edges_crossed=4; closed_corner_crossed=1.
+bccm_flat_normal_fixture: STATUS: PASSED WITH EVIDENCE; lods_qualified=0-7; closed_seam_normal_qualified=1.
+canonicalization_fixture: STATUS: PASSED WITH EVIDENCE; 24 directed edges; bounded overshoot and identity preservation validated.
+bccm_surface_edge_fixture: WP5.2 MILESTONE B VERIFICATION COMPLETE; ACTUAL GPU NUMERICAL PARITY: NOT YET TESTED.
 
 RENDERED VULKAN SMOKE
 Command: D:\Engines\Custom\godot-multinet\bin\godot.windows.editor.dev.x86_64.console.exe --path D:\Projects\Games\Project-Nations --quit --scene res://test.tscn

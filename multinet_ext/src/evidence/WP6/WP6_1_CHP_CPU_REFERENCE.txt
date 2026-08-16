@@ -8,7 +8,7 @@ multinet_ext/build/windows-editor/chp_cpu_reference_fixture.exe
 RESULT
 Exit code: 0
 
-EXACT OUTPUT
+PRIOR WP6.1 OUTPUT
 ## rendering::CHP-WP6.1-CPU-CONTRACT
 [PASS] CHP-MANIFEST-NORMALIZATION-01
 [PASS] CHP-FLAT-CPU-PARITY-01
@@ -44,5 +44,57 @@ horizon_surface_arc_error_m=0
 [PASS] CHP-PROFILE-CERTIFICATION-01
 WP6.1 CPU CONTRACT: PASSED
 
+CORRECTION RERUN EXACT OUTPUT
+## rendering::CHP-WP6.1-CPU-CONTRACT
+[PASS] CHP-MANIFEST-NORMALIZATION-01
+max_flat_identity_position_error_m=0
+[PASS] CHP-FLAT-CPU-PARITY-01
+certified_distance_km=1410.47:QuadraticVerticalFallback:0.141047:clamped=1
+certification_envelope_km=1410.47:QuadraticVerticalFallback:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=1410.47:SphericalPolynomial4:398.784:clamped=1
+certification_envelope_km=1410.47:SphericalPolynomial4:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=1410.47:SphericalPolynomial6:904.679:clamped=1
+certification_envelope_km=1410.47:SphericalPolynomial6:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=0.56419:QuadraticVerticalFallback:5.6419e-05:clamped=1
+certification_envelope_km=0.56419:QuadraticVerticalFallback:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=0.56419:SphericalPolynomial4:0.399805:clamped=1
+certification_envelope_km=0.56419:SphericalPolynomial4:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=0.56419:SphericalPolynomial6:0.683007:clamped=1
+certification_envelope_km=0.56419:SphericalPolynomial6:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=28.2095:QuadraticVerticalFallback:0.00282095:clamped=1
+certification_envelope_km=28.2095:QuadraticVerticalFallback:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=28.2095:SphericalPolynomial4:15.3126:clamped=1
+certification_envelope_km=28.2095:SphericalPolynomial4:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=28.2095:SphericalPolynomial6:29.5174:clamped=1
+certification_envelope_km=28.2095:SphericalPolynomial6:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=7052.37:QuadraticVerticalFallback:0.705237:clamped=1
+certification_envelope_km=7052.37:QuadraticVerticalFallback:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=7052.37:SphericalPolynomial4:1524.73:clamped=1
+certification_envelope_km=7052.37:SphericalPolynomial4:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=7052.37:SphericalPolynomial6:3698.77:clamped=1
+certification_envelope_km=7052.37:SphericalPolynomial6:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=6371:QuadraticVerticalFallback:0.6371:clamped=1
+certification_envelope_km=6371:QuadraticVerticalFallback:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=6371:SphericalPolynomial4:1400.95:clamped=1
+certification_envelope_km=6371:SphericalPolynomial4:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+certified_distance_km=6371:SphericalPolynomial6:3384.13:clamped=1
+certification_envelope_km=6371:SphericalPolynomial6:0.999=accepted:exact=accepted:nextafter=accepted:1.001=rejected:1.01=rejected
+max_poly4_exact_base_position_error_m=1
+max_poly6_exact_base_position_error_m=1
+[PASS] CHP-QUADRATIC-REFERENCE-01
+[PASS] CHP-POLY4-REFERENCE-01
+[PASS] CHP-POLY6-REFERENCE-01
+max_jacobian_normal_angular_error_rad=2.10734e-08
+[PASS] CHP-JACOBIAN-NORMAL-01
+horizon_los_error_m=0
+horizon_surface_arc_error_m=0
+[PASS] CHP-HORIZON-METRICS-01
+[PASS] CHP-DOMAIN-INDEPENDENCE-01
+[PASS] CHP-ROTATIONAL-SYMMETRY-01
+[PASS] CHP-SCALE-COVARIANCE-01
+[PASS] CHP-ERROR-HANDLING-01
+[PASS] CHP-PROFILE-CERTIFICATION-01
+WP6.1 CPU CONTRACT: PASSED
+
 BOUNDARY
-This receipt proves CPU contract mathematics and normalization only. It does not prove GPU numerical parity, BCCM integration, seam quality, horizon culling, or hardware qualification.
+This receipt proves CPU contract mathematics, certified-envelope enforcement, and normalization only. It does not prove GPU numerical parity, BCCM integration, seam quality, horizon culling, or hardware qualification.
