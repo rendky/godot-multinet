@@ -1,0 +1,35 @@
+WP6.1 CURVED HORIZON PRESENTATION — CPU-ONLY CLOSURE MANIFEST
+Run date: 2026-08-16
+Status: IMPLEMENTED / UNDER VALIDATION
+
+PACKAGE
+Engine-neutral CPU CHP profile, kernel, exact-sphere reference, certification, immutable view, manifest normalization, adapter diagnostics, and fixture coverage.
+
+EXACT-CURRENT VALIDATION
+- Root build: PASS, exit 0; Rule 3 scanned 46 files; no compiler warnings.
+- Six native fixtures: PASS, exit 0 each.
+- CHP CPU reference receipt: multinet_ext/src/evidence/WP6/WP6_1_CHP_CPU_REFERENCE.txt
+- Rendered Vulkan smoke: PASS on elevated rerun, exit 0; see WP6_1_REGRESSION_RECEIPT.txt.
+- Source/deployment hashes: WP6_1_SOURCE_HASHES.txt.
+
+EVIDENCE HASHES
+multinet_ext/src/evidence/WP6/WP6_1_CHP_CPU_REFERENCE.txt: 413B1879D71B203F2077DDB61DDD78C4F7077C2E326C4B84D1D9F145E43ADAD8
+multinet_ext/src/evidence/WP6/WP6_1_CHP_MANIFEST.txt: 0837599E79F6CCCC8859BDB4EA7E38D4F162E74DAE9D1B10EFA66C97D651EA3D
+multinet_ext/src/evidence/WP6/WP6_1_REGRESSION_RECEIPT.txt: AAFC5C2B3F6496E9DCBAF49F92084F876E9C3A112FFB701C1246EBB10B740D94
+multinet_ext/src/evidence/WP6/WP6_1_SOURCE_HASHES.txt: A42C7349CF08FD98E8496B41112608ACD3E06E815AB43DFF436D8800E0B64F49
+The closure manifest omits its own self-hash to avoid a circular manifest update.
+
+SOURCE BOUNDARY
+No Terrain generation, BCCM topology, V5 mapping, page identity, normals, surface projection, surface-coordinate conversion, or Earth-scale camera-relative precision code was changed.
+
+OPEN GATES
+ACTUAL GPU NUMERICAL PARITY: NOT YET TESTED
+CHP GPU EFFECTIVE: false
+CHP GPU integration: NOT STARTED
+CHP block seam/horizon cull: NOT PROVEN
+Full hardware qualification: NOT PROVEN
+
+NEXT PACKAGE
+WP6.2 — GPU/BCCM CHP integration, only after external review of this CPU contract.
+
+This manifest is the exact-current source/evidence receipt prepared for the closure commit. The final commit identifier is recorded in the closure handoff; this file deliberately omits a self-hash.

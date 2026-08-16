@@ -1,0 +1,48 @@
+WP6.1 EXACT-CURRENT SOURCE AND DEPLOYMENT HASHES
+Run date: 2026-08-16
+Algorithm: SHA-256, uppercase hexadecimal
+
+CHANGED SOURCE
+multinet_ext/src/multinet/rendering/chp/chp_profile.h
+multinet_ext/src/multinet/rendering/chp/chp_view.h
+multinet_ext/src/multinet/rendering/chp/chp_view.cpp
+multinet_ext/src/multinet/rendering/chp/chp_kernel.h
+multinet_ext/src/multinet/rendering/chp/chp_kernel.cpp
+multinet_ext/src/multinet/rendering/chp/chp_certification.h
+multinet_ext/src/multinet/rendering/chp/chp_certification.cpp
+multinet_ext/src/multinet/core/spatial/world_manifests.h
+multinet_ext/src/multinet/core/spatial/world_manifests.cpp
+multinet_ext/src/godot/terrain_adapter.h
+multinet_ext/src/godot/terrain_adapter.cpp
+multinet_ext/src/tests/world_domain_fixture.cpp
+multinet_ext/src/tests/chp_cpu_reference_fixture.cpp
+multinet_ext/CMakeLists.txt
+
+HASH TABLE
+Filled from the exact post-build working tree before closure commit.
+
+multinet_ext/src/multinet/rendering/chp/chp_profile.h: B6B3CD78A53B0425B99F445D368F22DCE678FBF8080F2A0B61F070F51DCA2A74
+multinet_ext/src/multinet/rendering/chp/chp_view.h: 4BEBFFB635AF2F1F477254BDA21FD43BC0C1F6658F03DB9802F88BDF1F5AD8B1
+multinet_ext/src/multinet/rendering/chp/chp_view.cpp: 474312076C1F0974DF8C07A7D47D69A907978993C3EA6D199FC3D52FD825812D
+multinet_ext/src/multinet/rendering/chp/chp_kernel.h: 6F5A55F14AB2F99E1626D2A4CA794C737E2B41EE8AE690386154823D1981C7D2
+multinet_ext/src/multinet/rendering/chp/chp_kernel.cpp: 52074B64FCC727F65FFB747E518C832C41CB912FEFE527D3ADD228BFE5A35808
+multinet_ext/src/multinet/rendering/chp/chp_certification.h: B0016FC3BCFF04812DF1E0030FDE5F986DDAEDE5D79527E476EE667975E21851
+multinet_ext/src/multinet/rendering/chp/chp_certification.cpp: 7AE94D4B96235BCF6FEBA74E9A54F316F39E0BBE53D0DAB8A9B36D7C6EA50865
+multinet_ext/src/multinet/core/spatial/world_manifests.h: B76E7658E6F921B7B8A30226C0E24D3893A58461FFB335F30FAFD09B46BEC645
+multinet_ext/src/multinet/core/spatial/world_manifests.cpp: 7C12DEEC0F56D02824C3D28633C690E026302AE1769830FEE9B43886A2AD42C1
+multinet_ext/src/godot/terrain_adapter.h: 0CA9B98213EB2B644510020A1C915072399477A7B237237D39BB41A177814B11
+multinet_ext/src/godot/terrain_adapter.cpp: 54D7E0643949CAF43EB782727BDCC18EA47E1A24AFC70D608626D8C99F351003
+multinet_ext/src/tests/world_domain_fixture.cpp: B594BC301E0D91842EF650068470CF911A28E81E4C6AF349AC15C8634A0721AF
+multinet_ext/src/tests/chp_cpu_reference_fixture.cpp: 3F68F60FC293F4345C47CC24576965E3934EE8144ED4FE75B41769760E2F3ADC
+multinet_ext/CMakeLists.txt: 61813516BD9EF82BE4F03F5D19FCD3F85A87C5161268F4F96DE4C4C63F0F32C4
+multinet_ext/build/windows-editor/multinet.dll: FD9CE2D3B7359B410E6A801105090DF354F35466EC385BBBFF9E0CF6F1E50864
+multinet_ext/build/windows-editor/chp_cpu_reference_fixture.exe: 053ECAB5793361BC56618059A75DD17138EFA75314B7D230F7DB112566F8EC7E
+doc/multinetARC/Infront_Implementation_Status.md: 1AA05170B96D095DC82C908288726E5148360B83C11441CD05BFA0558BFA8988
+
+PROTECTED BCCM HASHES (before = after)
+multinet_ext/src/multinet/rendering/bccm/block_clipmap_renderer.cpp: 1A4156C0054641BE74FF2D6F3AFD71DB212615763D2301AA63EAA213122E19E3
+multinet_ext/src/multinet/rendering/bccm/block_clipmap_renderer.h: 689797967AB6E5982EBC93D999141C792E4A3B2117F66D59F8A72693A033022E
+multinet_ext/src/multinet/rendering/bccm/block_clipmap_shader.cpp: 0F836E8F7FE0F58A580E1E2E4FDE78556B7D4D6E4BBB5F2402CC2B08E915033C
+multinet_ext/src/multinet/rendering/bccm/block_clipmap_shader.h: A7774B4848DE05C371F9B01EE85E6DEE0C6FC4892B57E8730DDD13E8912B8D26
+
+The receipt intentionally omits its own self-hash to avoid a circular manifest update.

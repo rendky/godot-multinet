@@ -1019,17 +1019,38 @@ int main() {
 		"closed explicit radius was not normalized to canonical policy");
 
 	WorldPresentationInput finite_area_input;
+	finite_area_input.chp_enabled = true;
 	finite_area_input.chp_radius_policy = CHPRadiusPolicy::AreaEquivalent;
 	WorldPresentationManifest finite_area = build_world_presentation_manifest(finite, finite_area_input);
 	WorldPresentationInput finite_explicit_input;
 	finite_explicit_input.chp_radius_policy = CHPRadiusPolicy::Explicit;
 	finite_explicit_input.explicit_chp_radius_mm = 123456;
+	finite_explicit_input.chp_enabled = true;
 	WorldPresentationManifest finite_explicit = build_world_presentation_manifest(finite, finite_explicit_input);
 	require(finite_area.is_valid() && finite_explicit.is_valid(), "finite presentation policy invalid");
 	require(finite_area.domain_manifest_hash == finite_explicit.domain_manifest_hash &&
 		finite_area.resolved_chp_radius_mm != finite_explicit.resolved_chp_radius_mm,
 		"finite presentation policy did not remain separate from domain identity");
+	WorldPresentationInput finite_canonical_input;
+	finite_canonical_input.chp_enabled = true;
+	finite_canonical_input.chp_radius_policy = CHPRadiusPolicy::CanonicalClosedSurface;
+	WorldPresentationManifest finite_canonical = build_world_presentation_manifest(finite, finite_canonical_input);
+	require(finite_canonical.is_valid() && finite_canonical.chp_radius_policy == CHPRadiusPolicy::AreaEquivalent,
+		"finite canonical policy was not normalized to AreaEquivalent");
+	WorldPresentationInput finite_disabled_a;
+	finite_disabled_a.chp_radius_policy = CHPRadiusPolicy::Explicit;
+	finite_disabled_a.explicit_chp_radius_mm = 0;
+	WorldPresentationInput finite_disabled_b = finite_disabled_a;
+	finite_disabled_b.explicit_chp_radius_mm = 123456;
+	WorldPresentationManifest finite_disabled_manifest_a = build_world_presentation_manifest(finite, finite_disabled_a);
+	WorldPresentationManifest finite_disabled_manifest_b = build_world_presentation_manifest(finite, finite_disabled_b);
+	require(finite_disabled_manifest_a.is_valid() && finite_disabled_manifest_b.is_valid() &&
+		finite_disabled_manifest_a.chp_radius_policy == CHPRadiusPolicy::AreaEquivalent &&
+		finite_disabled_manifest_a.chp_kernel_version == 0 &&
+		finite_disabled_manifest_a.presentation_manifest_hash == finite_disabled_manifest_b.presentation_manifest_hash,
+		"disabled finite CHP was invalid or leaked hidden explicit configuration");
 	WorldPresentationInput finite_invalid_input;
+	finite_invalid_input.chp_enabled = true;
 	finite_invalid_input.chp_radius_policy = CHPRadiusPolicy::Explicit;
 	require(!build_world_presentation_manifest(finite, finite_invalid_input).is_valid(), "zero finite CHP radius accepted");
 

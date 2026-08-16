@@ -387,6 +387,49 @@ bool MultinetBCCMNode3D::configure_bccm_profile() {
 	return false;
 }
 
+void MultinetBCCMNode3D::refresh_chp_view() {
+	current_chp_view = {};
+	if (!world_domain_manifest.is_valid() || !world_presentation_manifest.is_valid() ||
+		current_cam_state.frame_epoch == 0 || !current_cam_state.canonical_position.is_valid()) return;
+	Multinet::FramePosition64 camera_in_frame{};
+	if (!Multinet::try_domain_surface_to_frame(
+		current_cam_state.canonical_position,
+		current_cam_state.active_frame,
+		world_domain_manifest,
+		camera_in_frame)) return;
+	const uint64_t epoch = current_cam_state.frame_epoch;
+	const uint32_t camera_epoch = epoch > static_cast<uint64_t>((std::numeric_limits<uint32_t>::max)())
+		? (std::numeric_limits<uint32_t>::max)()
+		: static_cast<uint32_t>(epoch);
+	const uint32_t source_epoch = source_expectation.source_version == 0 ? 1 : source_expectation.source_version;
+	const bool view_valid = multinet::rendering::chp::try_build_curved_horizon_view(
+		world_domain_manifest,
+		world_presentation_manifest,
+		resolved_chp_profile,
+		current_cam_state.canonical_position,
+		camera_in_frame,
+		epoch,
+		camera_epoch,
+		source_epoch,
+		current_chp_view);
+	if (!view_valid) current_chp_view = {};
+}
+
+void MultinetBCCMNode3D::refresh_chp_contract() {
+	const double ordinary_coverage_m = bccm_renderer.get_effective_coverage_extent_m();
+	chp_profile.requested_maximum_deformation_distance_m =
+		std::isfinite(ordinary_coverage_m) && ordinary_coverage_m > 0.0 ? ordinary_coverage_m : 1.0;
+	resolved_chp_profile = {};
+	if (world_presentation_manifest.is_valid() && world_presentation_manifest.chp_enabled) {
+		const bool profile_valid = multinet::rendering::chp::try_resolve_curved_horizon_profile(
+			world_presentation_manifest,
+			chp_profile,
+			resolved_chp_profile);
+		if (!profile_valid) resolved_chp_profile = {};
+	}
+	refresh_chp_view();
+}
+
 // ---------------------------------------------------------------------------
 // Recipe rebuild path
 // ---------------------------------------------------------------------------
@@ -456,6 +499,7 @@ void MultinetBCCMNode3D::apply_recipe_rebuild() {
 			bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
 		}
 	}
+	refresh_chp_contract();
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +568,7 @@ void MultinetBCCMNode3D::rebuild_source() {
 	manifest_built = true;
 	source_dirty = false;
 	domain_validation_message = "OK";
+	refresh_chp_contract();
 }
 
 void MultinetBCCMNode3D::set_canonical_camera_state(
@@ -535,6 +580,7 @@ void MultinetBCCMNode3D::set_canonical_camera_state(
 	current_cam_state.active_frame = p_active_frame;
 	current_cam_state.frame_epoch = p_frame_epoch;
 	current_cam_state.is_visible = is_visible_in_tree();
+	refresh_chp_view();
 }
 
 void MultinetBCCMNode3D::set_canonical_camera_state_from_values(
@@ -582,6 +628,7 @@ void MultinetBCCMNode3D::set_canonical_camera_state_from_values(
 		current_cam_state.logical_chart_root_direction,
 		current_cam_state.logical_chart_presentation_x_tangent,
 		current_cam_state.logical_chart_presentation_z_tangent);
+	refresh_chp_view();
 }
 
 godot::Dictionary MultinetBCCMNode3D::advance_canonical_observer(
@@ -1100,6 +1147,7 @@ void MultinetBCCMNode3D::init_rendering() {
 			bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
 		}
 	}
+	refresh_chp_contract();
 }
 
 void MultinetBCCMNode3D::free_rendering() {
@@ -1424,6 +1472,7 @@ void MultinetBCCMNode3D::set_chp_enabled(bool p_enabled) {
 	world_presentation_input.chp_enabled = p_enabled;
 	presentation_rebuild_pending = true;
 	world_presentation_manifest = Multinet::build_world_presentation_manifest(world_domain_manifest, world_presentation_input);
+	refresh_chp_contract();
 	notify_property_list_changed();
 }
 
@@ -1434,6 +1483,7 @@ void MultinetBCCMNode3D::set_chp_radius_policy(int p_policy) {
 	world_presentation_input.chp_radius_policy = static_cast<Multinet::CHPRadiusPolicy>(clamped);
 	presentation_rebuild_pending = true;
 	world_presentation_manifest = Multinet::build_world_presentation_manifest(world_domain_manifest, world_presentation_input);
+	refresh_chp_contract();
 	notify_property_list_changed();
 }
 
@@ -1448,6 +1498,7 @@ void MultinetBCCMNode3D::set_chp_explicit_radius_km(double p_km) {
 	world_presentation_input.explicit_chp_radius_mm = metres * 1000ULL;
 	presentation_rebuild_pending = true;
 	world_presentation_manifest = Multinet::build_world_presentation_manifest(world_domain_manifest, world_presentation_input);
+	refresh_chp_contract();
 	notify_property_list_changed();
 }
 
@@ -1506,7 +1557,11 @@ godot::String MultinetBCCMNode3D::get_domain_validation_message() const {
 }
 
 godot::String MultinetBCCMNode3D::get_chp_status() const {
-	return "NOT IMPLEMENTED / INACTIVE";
+	if (!world_presentation_manifest.is_valid()) return "CPU CONTRACT INVALID / GPU INTEGRATION NOT STARTED";
+	if (world_presentation_input.chp_enabled && !resolved_chp_profile.is_valid()) {
+		return "CPU CONTRACT INVALID / GPU INTEGRATION NOT STARTED";
+	}
+	return "CPU CONTRACT READY / GPU INTEGRATION NOT STARTED";
 }
 
 void MultinetBCCMNode3D::set_camera_target(const godot::NodePath& p_path) { camera_target = p_path; }
@@ -1539,10 +1594,27 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 		? "FiniteRectangle" : "ClosedSurfaceSixFace";
 	dict["coordinate_wrapping"] = get_coordinate_wrapping();
 	dict["chp_requested"] = world_presentation_input.chp_enabled;
-	dict["chp_effective"] = false; // CHP geometry is intentionally deferred to WP6.1.
-	dict["chp_implementation_state"] = "NOT IMPLEMENTED / INACTIVE";
+	dict["chp_effective"] = false; // WP6.1 publishes the CPU contract only; WP6.2 owns GPU geometry.
+	dict["chp_cpu_contract_valid"] = world_presentation_input.chp_enabled
+		? resolved_chp_profile.is_valid()
+		: world_presentation_manifest.is_valid();
+	dict["chp_gpu_effective"] = false;
+	dict["chp_implementation_state"] = get_chp_status();
 	dict["chp_radius_policy"] = static_cast<int>(world_presentation_manifest.chp_radius_policy);
 	dict["resolved_chp_radius_km"] = static_cast<double>(world_presentation_manifest.resolved_chp_radius_mm) / 1000000.0;
+	dict["chp_function_class"] = static_cast<int>(chp_profile.function_class);
+	dict["chp_function_class_name"] = multinet::rendering::chp::get_function_class_name(chp_profile.function_class);
+	dict["chp_requested_maximum_distance_km"] = chp_profile.requested_maximum_deformation_distance_m / 1000.0;
+	dict["chp_certified_maximum_distance_km"] = resolved_chp_profile.certified_maximum_deformation_distance_m / 1000.0;
+	dict["chp_distance_was_clamped"] = resolved_chp_profile.distance_was_clamped;
+	dict["chp_position_error_at_limit_m"] = resolved_chp_profile.base_position_error_at_limit_m;
+	dict["chp_visual_up_error_at_limit_rad"] = resolved_chp_profile.visual_up_error_at_limit_radians;
+	dict["chp_camera_surface_altitude_m"] = current_chp_view.camera_surface_height_m;
+	dict["chp_horizon_line_of_sight_km"] = current_chp_view.horizon_line_of_sight_m / 1000.0;
+	dict["chp_horizon_surface_arc_km"] = current_chp_view.horizon_surface_arc_m / 1000.0;
+	dict["chp_nominal_admitted_intrinsic_radius_km"] = current_chp_view.nominal_admitted_intrinsic_radius_m / 1000.0;
+	dict["chp_kernel_contract_version"] = world_presentation_manifest.chp_kernel_version;
+	dict["chp_profile_version"] = chp_profile.profile_version;
 	dict["canonical_area_km2"] = get_canonical_area_km2();
 	dict["logical_radius_km"] = get_logical_radius_km();
 	dict["closed_face_extent_km"] = get_closed_face_extent_km();

@@ -1,0 +1,28 @@
+WP6.1 EXACT-CURRENT REGRESSION RECEIPT
+Run date: 2026-08-16
+
+ROOT BUILD
+Command: D:\Engines\Custom\godot-multinet\build_multinet.bat
+Result: exit code 0
+Rule 3: scanned 46 files; DLL linked and deployed; no compiler warnings after the [[nodiscard]] handling cleanup.
+
+EXPLICIT FIXTURE BUILD
+Command: elevated VS developer environment invoking Ninja for world_domain_fixture editor_domain_navigation_fixture bccm_flat_normal_fixture canonicalization_fixture bccm_surface_edge_fixture chp_cpu_reference_fixture
+Result: exit code 0
+
+FIXTURE RUNS
+world_domain_fixture: exit 0
+editor_domain_navigation_fixture: exit 0
+bccm_flat_normal_fixture: exit 0
+canonicalization_fixture: exit 0
+bccm_surface_edge_fixture: exit 0
+chp_cpu_reference_fixture: exit 0
+
+RENDERED VULKAN SMOKE
+Command: D:\Engines\Custom\godot-multinet\bin\godot.windows.editor.dev.x86_64.console.exe --path D:\Projects\Games\Project-Nations --quit --scene res://test.tscn
+Result: elevated rerun exit 0.
+Observed: Vulkan 1.4.312, NVIDIA GeForce GTX 860M, BCCM shader/material RIDs valid.
+Qualification note: the first non-elevated attempt stopped in Godot logger rotation before project startup (`RotatedFileLogger::rotate_file`, `user://logs` access). That environment failure is not an extension/compiler result; the scoped elevated rerun passed.
+
+BOUNDARY
+This is a normal rendered smoke, not visual closure or GPU numerical parity evidence.

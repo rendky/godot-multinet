@@ -1,0 +1,28 @@
+WP6.1 CHP CPU CONTRACT MANIFEST
+Run date: 2026-08-16
+
+NORMALIZATION CONTRACT
+- ClosedSurfaceSixFace + CHP enabled: policy CanonicalClosedSurface; radius is canonical logical radius rounded to millimetres; kernel contract 1.
+- FiniteRectangle + CHP enabled: policy AreaEquivalent or Explicit; a stale CanonicalClosedSurface request is normalized to AreaEquivalent.
+- FiniteRectangle + CHP disabled: valid normalized disabled state; policy AreaEquivalent; area-equivalent radius; kernel contract 0. Hidden stale explicit radius does not invalidate the manifest or alter the presentation hash.
+- Presentation normalization does not alter domain hash, canonical terrain identity, page identity, or BCCM topology.
+
+FIXTURE COVERAGE
+- Finite area and explicit CHP policy normalization: PASS.
+- Finite stale-disabled hidden-radius/hash stability: PASS.
+- Closed canonical radius/kernel validation: PASS.
+- Flat identity and flat normal cross-law: PASS.
+- Quadratic, spherical polynomial-4, and spherical polynomial-6 reference checks: PASS.
+- Full analytic Jacobian normal check: PASS; max angular error 2.10734e-08 rad.
+- LOS and surface-arc horizon metrics: PASS; both reported errors 0 m.
+- Domain independence, rotational symmetry, scale covariance, error handling, and profile certification: PASS.
+
+IMPLEMENTATION BOUNDARY
+CHP is exposed as a CPU contract and diagnostic state only. The adapter reports `chp_effective=false`; no shader uniform, BCCM renderer, terrain generation, topology, V5 mapping, page identity, normals, projection, or surface-coordinate conversion was changed.
+
+UNPROVEN GATES
+ACTUAL GPU NUMERICAL PARITY: NOT YET TESTED
+CHP GPU EFFECTIVE: false
+CHP GPU integration: NOT STARTED
+CHP block seam/horizon cull: NOT PROVEN
+Full hardware qualification: NOT PROVEN

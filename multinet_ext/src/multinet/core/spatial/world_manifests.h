@@ -21,6 +21,7 @@ constexpr uint32_t PROJECTION_VERSION_NONE = 0;
 constexpr float CANONICAL_ANALYTIC_NORMAL_SAMPLE_STEP_M = 0.5f;
 constexpr uint32_t BCCM_ANALYTIC_NORMAL_VERSION_2 = 2;
 constexpr uint32_t BCCM_ANALYTIC_NORMAL_VERSION_3 = 3;
+constexpr uint32_t CHP_KERNEL_CONTRACT_VERSION_1 = 1;
 
 struct WorldScaleInput {
 	uint64_t area_equivalent_side_m{ 5000000 };
@@ -110,7 +111,7 @@ struct WorldPresentationInput {
 	bool chp_enabled{ false };
 	CHPRadiusPolicy chp_radius_policy{ CHPRadiusPolicy::CanonicalClosedSurface };
 	uint64_t explicit_chp_radius_mm{ 0 };
-	uint32_t chp_kernel_version{ 1 };
+	uint32_t chp_kernel_version{ CHP_KERNEL_CONTRACT_VERSION_1 };
 	uint32_t presentation_version{ 1 };
 };
 
@@ -119,7 +120,7 @@ struct WorldPresentationManifest {
 	bool chp_enabled{ false };
 	CHPRadiusPolicy chp_radius_policy{ CHPRadiusPolicy::CanonicalClosedSurface };
 	uint64_t resolved_chp_radius_mm{ 0 };
-	uint32_t chp_kernel_version{ 1 };
+	uint32_t chp_kernel_version{ CHP_KERNEL_CONTRACT_VERSION_1 };
 	uint32_t presentation_version{ 1 };
 	uint64_t presentation_manifest_hash{ 0 };
 

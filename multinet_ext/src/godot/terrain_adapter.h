@@ -3,6 +3,8 @@
 
 #include <godot_cpp/classes/node3d.hpp>
 #include "multinet/rendering/terrain/block_clipmap/block_clipmap_renderer.h"
+#include "multinet/rendering/chp/chp_certification.h"
+#include "multinet/rendering/chp/chp_view.h"
 #include "multinet/world/terrain/outputs/rendering/concrete_terrain_render_source.h"
 #include "multinet/core/jobs/bounded_background_job_executor.h"
 #include <memory>
@@ -93,6 +95,9 @@ private:
 	Multinet::WorldDomainManifest world_domain_manifest{};
 	Multinet::WorldPresentationInput world_presentation_input{};
 	Multinet::WorldPresentationManifest world_presentation_manifest{};
+	multinet::rendering::chp::CurvedHorizonProfile chp_profile{};
+	multinet::rendering::chp::ResolvedCurvedHorizonProfile resolved_chp_profile{};
+	multinet::rendering::chp::CurvedHorizonView current_chp_view{};
 	bool square_world{ true };
 	bool finite_aspect_history_valid{ false };
 	bool finite_aspect_history_square_world{ false };
@@ -140,6 +145,8 @@ private:
 	void build_source_expectation();
 	void refresh_source_expectation_from_source();
 	[[nodiscard]] bool configure_bccm_profile();
+	void refresh_chp_contract();
+	void refresh_chp_view();
 
 	// Marks source_dirty and recipe_rebuild_pending.
 	// Setters call this — not free_rendering().

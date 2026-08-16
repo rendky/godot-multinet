@@ -173,22 +173,42 @@ WorldPresentationManifest build_world_presentation_manifest(
 	if (!domain.is_valid()) return manifest;
 	manifest.domain_manifest_hash = domain.domain_manifest_hash;
 	manifest.chp_enabled = input.chp_enabled;
-	manifest.chp_kernel_version = input.chp_kernel_version;
 	manifest.presentation_version = input.presentation_version;
-	manifest.chp_radius_policy = input.chp_radius_policy;
+	const uint64_t area_equivalent_radius_mm = static_cast<uint64_t>(std::llround(
+		std::sqrt(static_cast<double>(domain.canonical_area_m2) / (4.0 * 3.14159265358979323846)) * 1000.0));
+	if (area_equivalent_radius_mm == 0) return WorldPresentationManifest{};
 
-	if (!domain.is_finite()) {
-		manifest.chp_radius_policy = CHPRadiusPolicy::CanonicalClosedSurface;
-		manifest.resolved_chp_radius_mm = static_cast<uint64_t>(std::llround(domain.closed_surface.logical_area_radius_m * 1000.0));
-	} else if (input.chp_radius_policy == CHPRadiusPolicy::AreaEquivalent) {
-		manifest.resolved_chp_radius_mm = static_cast<uint64_t>(std::llround(
-			std::sqrt(static_cast<double>(domain.canonical_area_m2) / (4.0 * 3.14159265358979323846)) * 1000.0));
-	} else if (input.chp_radius_policy == CHPRadiusPolicy::Explicit) {
-		if (input.explicit_chp_radius_mm == 0) return WorldPresentationManifest{};
-		manifest.resolved_chp_radius_mm = input.explicit_chp_radius_mm;
+	if (!input.chp_enabled) {
+		// Inactive editor values are not an active presentation contract. Keep a
+		// deterministic, valid manifest so disabling CHP cannot fail on stale
+		// hidden explicit-radius settings.
+		manifest.chp_radius_policy = domain.is_finite()
+			? CHPRadiusPolicy::AreaEquivalent
+			: CHPRadiusPolicy::CanonicalClosedSurface;
+		manifest.resolved_chp_radius_mm = domain.is_finite()
+			? area_equivalent_radius_mm
+			: static_cast<uint64_t>(std::llround(domain.closed_surface.logical_area_radius_m * 1000.0));
+		manifest.chp_kernel_version = 0;
 	} else {
-		manifest.resolved_chp_radius_mm = static_cast<uint64_t>(std::llround(
-			std::sqrt(static_cast<double>(domain.canonical_area_m2) / (4.0 * 3.14159265358979323846)) * 1000.0));
+		if (input.chp_kernel_version != CHP_KERNEL_CONTRACT_VERSION_1) return WorldPresentationManifest{};
+		manifest.chp_kernel_version = CHP_KERNEL_CONTRACT_VERSION_1;
+		if (!domain.is_finite()) {
+			// A closed surface has one canonical equal-area presentation radius.
+			manifest.chp_radius_policy = CHPRadiusPolicy::CanonicalClosedSurface;
+			manifest.resolved_chp_radius_mm = static_cast<uint64_t>(std::llround(domain.closed_surface.logical_area_radius_m * 1000.0));
+		} else if (input.chp_radius_policy == CHPRadiusPolicy::AreaEquivalent ||
+			input.chp_radius_policy == CHPRadiusPolicy::CanonicalClosedSurface) {
+			// CanonicalClosedSurface has no finite-domain meaning. Normalize it to
+			// the finite area-equivalent policy before hashing the manifest.
+			manifest.chp_radius_policy = CHPRadiusPolicy::AreaEquivalent;
+			manifest.resolved_chp_radius_mm = area_equivalent_radius_mm;
+		} else if (input.chp_radius_policy == CHPRadiusPolicy::Explicit) {
+			if (input.explicit_chp_radius_mm == 0) return WorldPresentationManifest{};
+			manifest.chp_radius_policy = CHPRadiusPolicy::Explicit;
+			manifest.resolved_chp_radius_mm = input.explicit_chp_radius_mm;
+		} else {
+			return WorldPresentationManifest{};
+		}
 	}
 
 	uint64_t h = 14695981039346656037ULL;
