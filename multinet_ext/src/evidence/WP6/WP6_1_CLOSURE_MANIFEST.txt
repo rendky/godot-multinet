@@ -1,6 +1,7 @@
 WP6.1 CURVED HORIZON PRESENTATION — CPU-ONLY CLOSURE MANIFEST
 Run date: 2026-08-16
 Status: IMPLEMENTED / UNDER VALIDATION
+Implementation/evidence commit: 0bdd9c364d (signed)
 
 PACKAGE
 Engine-neutral CPU CHP profile, kernel, exact-sphere reference, certification, immutable view, manifest normalization, adapter diagnostics, and fixture coverage.
@@ -32,4 +33,4 @@ Full hardware qualification: NOT PROVEN
 NEXT PACKAGE
 WP6.2 — GPU/BCCM CHP integration, only after external review of this CPU contract.
 
-This manifest is the exact-current source/evidence receipt prepared for the closure commit. The final commit identifier is recorded in the closure handoff; this file deliberately omits a self-hash.
+This manifest is the exact-current source/evidence receipt for implementation commit 0bdd9c364d. The metadata update that records this identifier is intentionally separate; this file deliberately omits a self-hash.
