@@ -56,7 +56,7 @@ It means identical coordinate bits, seed, and algorithm version return the exact
 
 ## Boundaries which are bound to change as we build.
 
- Multinet basically lives under `modules/`. Internal kernels use C++23 PODs, `std::span`, arenas, and data-oriented containers.
+ Multinet used to live under `modules/`, but we moved to gdextensions so now it lives under `multinet_ext`. Internal kernels use C++23 PODs, `std::span`, arenas, and data-oriented containers.
 
 ```bash
 # Build editor binary (SCons)
