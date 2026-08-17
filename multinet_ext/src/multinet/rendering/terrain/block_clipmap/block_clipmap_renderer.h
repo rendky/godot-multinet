@@ -6,6 +6,7 @@
 #include "multinet/rendering/terrain/block_clipmap/block_clipmap_culling.h"
 #include "multinet/rendering/terrain/block_clipmap/block_clipmap_shader.h"
 #include "multinet/rendering/terrain/block_clipmap/block_clipmap_ids.h"
+#include "multinet/rendering/chp/chp_view.h"
 #include "multinet/world/terrain/outputs/rendering/terrain_render_source.h"
 
 #ifndef MULTINET_TEST
@@ -464,6 +465,9 @@ private:
 	bool analytic_debug_prewarm_pages{ false };
 	bool face_colors_enabled{ true };
 	bool diamond_triangulation_enabled{ true };
+	int chp_debug_reconstruction_mode{ 2 };
+	bool chp_debug_negative_height_color{ false };
+	bool chp_debug_negative_height_exaggeration{ false };
 	Multinet::TerrainFallbackBounds fallback_bounds{};
 	Multinet::WorldDomainManifest active_domain{};
 
@@ -616,6 +620,15 @@ private:
 	uint32_t next_ring_terminal_keys_required{ 0 };
 	uint32_t next_ring_terminal_keys_resident{ 0 };
 
+	Multinet::TerrainRecipe cached_recipe_{};
+	Multinet::WorldScaleManifest cached_scale_{};
+	bool last_bound_chp_gpu_effective_{ false };
+	float last_bound_chp_camera_altitude_m_{ 0.0f };
+	godot::RID frozen_frustum_mesh_rid_{};
+	godot::RID frozen_frustum_instance_rid_{};
+	godot::Transform3D frozen_frustum_transform_{};
+	bool has_frozen_frustum_{ false };
+
 	godot::RID create_master_block_mesh(bool p_diamond_triangulation);
 
 	// Uploads a zero scalar page to GPU layer 0 for a given LOD.
@@ -678,7 +691,8 @@ public:
 		const Multinet::WorldScaleManifest& scale,
 		const BCCMCameraState& cam_state,
 		const BCCMSourceExpectation& expectation,
-		Multinet::TerrainRenderSource* terrain_source = nullptr
+		Multinet::TerrainRenderSource* terrain_source = nullptr,
+		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr
 	);
 
 	void update_with_view(
@@ -687,20 +701,45 @@ public:
 		const Multinet::WorldScaleManifest& scale,
 		const BCCMCameraState& cam_state,
 		const BCCMSourceExpectation& expectation,
-		Multinet::TerrainRenderSource* terrain_source = nullptr
+		Multinet::TerrainRenderSource* terrain_source = nullptr,
+		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr
 	);
 
-	// Freeze keeps the submitted set and page state fixed, but editor camera
-	// movement still needs a relative-origin rebase so the frozen terrain stays
-	// in world space instead of appearing glued to the viewport.
-	void rebase_frozen_presentation(const godot::Vector3& p_camera_world_position) noexcept;
+	// Freeze keeps the submitted set and page state fixed, but camera
+	// movement applies a continuous camera delta and CHP altitude refresh
+	// so the live camera moves freely around the frozen cut in world space.
+	void update_frozen_view_presentation_delta(
+		const godot::Vector3& p_camera_delta,
+		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr
+	) noexcept;
+
+	void update_frozen_view_presentation(
+		const godot::Vector3& p_camera_world_position,
+		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr
+	) noexcept;
+
+	void rebase_frozen_presentation(const godot::Vector3& p_camera_world_position) noexcept {
+		update_frozen_view_presentation(p_camera_world_position, nullptr);
+	}
+
+	void set_frozen_frustum_visualization(
+		const godot::Transform3D& camera_transform,
+		float fov_deg,
+		float near_m,
+		float far_m,
+		float aspect
+	) noexcept;
+
+	void clear_frozen_frustum_visualization() noexcept;
+	bool has_frozen_frustum_visualization() const noexcept { return has_frozen_frustum_; }
 
 	void update(
 		godot::Camera3D* p_camera,
 		const Multinet::WorldScaleManifest& scale,
 		const BCCMCameraState& cam_state,
 		const BCCMSourceExpectation& expectation,
-		Multinet::TerrainRenderSource* terrain_source = nullptr
+		Multinet::TerrainRenderSource* terrain_source = nullptr,
+		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr
 	);
 
 	const BlockClipmapProfile& get_profile() const noexcept { return profile; }
@@ -738,6 +777,15 @@ public:
 
 	bool get_diamond_triangulation_enabled() const noexcept { return diamond_triangulation_enabled; }
 	void set_diamond_triangulation_enabled(bool enabled) noexcept;
+
+	int get_chp_debug_reconstruction_mode() const noexcept { return chp_debug_reconstruction_mode; }
+	void set_chp_debug_reconstruction_mode(int mode) noexcept { chp_debug_reconstruction_mode = mode; }
+
+	bool get_chp_debug_negative_height_color() const noexcept { return chp_debug_negative_height_color; }
+	void set_chp_debug_negative_height_color(bool enabled) noexcept { chp_debug_negative_height_color = enabled; }
+
+	bool get_chp_debug_negative_height_exaggeration() const noexcept { return chp_debug_negative_height_exaggeration; }
+	void set_chp_debug_negative_height_exaggeration(bool enabled) noexcept { chp_debug_negative_height_exaggeration = enabled; }
 
 	const FrameTerrainSubmissionPlan& get_last_submission_plan() const { return last_submission_plan; }
 	const StreamingDiagnosticsSnapshot& get_last_streaming_diagnostics() const { return last_streaming_diagnostics; }
@@ -844,6 +892,10 @@ public:
 		}
 	}
 	uint64_t inspect_retirement_frame(uint8_t lod, uint32_t layer) const { return levels[lod].slots[layer].retire_after_frame; }
+	float inspect_bound_chp_camera_altitude() const noexcept { return last_bound_chp_camera_altitude_m_; }
+	bool inspect_bound_chp_gpu_effective() const noexcept { return last_bound_chp_gpu_effective_; }
+	const godot::Vector3& inspect_active_view_world_position() const noexcept { return active_view_world_position; }
+	const std::vector<float>& inspect_ring_buffer(uint8_t lod, uint8_t ring_idx) const noexcept { return multimesh_ring_buffers[lod][ring_idx]; }
 #endif
 };
 

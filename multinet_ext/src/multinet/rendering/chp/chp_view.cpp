@@ -45,11 +45,16 @@ bool try_build_curved_horizon_view(
 		return false;
 	}
 
+	const double signed_camera_surface_altitude_m = camera_surface.altitude_m;
+	const double horizon_observer_height_m = std::max(0.0, signed_camera_surface_altitude_m);
+
 	out_view.manifest = presentation;
 	out_view.profile = profile;
 	out_view.camera_surface = camera_surface;
 	out_view.camera_in_frame = camera_in_frame;
-	out_view.camera_surface_height_m = std::max(0.0, camera_surface.altitude_m);
+	out_view.signed_camera_surface_altitude_m = signed_camera_surface_altitude_m;
+	out_view.camera_surface_height_m = signed_camera_surface_altitude_m;
+	out_view.horizon_observer_height_m = horizon_observer_height_m;
 	out_view.surface_frame_epoch = surface_frame_epoch;
 	out_view.camera_epoch = camera_epoch;
 	out_view.source_epoch = source_epoch;
@@ -57,7 +62,7 @@ bool try_build_curved_horizon_view(
 
 	const double radius_m = static_cast<double>(presentation.resolved_chp_radius_mm) * 0.001;
 	if (radius_m > 0.0 && std::isfinite(radius_m)) {
-		const double h = out_view.camera_surface_height_m;
+		const double h = horizon_observer_height_m;
 		out_view.horizon_line_of_sight_m = std::sqrt(2.0 * radius_m * h + h * h);
 		out_view.horizon_surface_arc_m = h > 0.0
 			? radius_m * std::acos(std::clamp(radius_m / (radius_m + h), -1.0, 1.0))

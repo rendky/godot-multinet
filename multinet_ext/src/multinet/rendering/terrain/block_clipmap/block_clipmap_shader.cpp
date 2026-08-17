@@ -52,9 +52,43 @@ uniform vec3 face_color_3 = vec3(0.68, 0.38, 0.88);
 uniform vec3 face_color_4 = vec3(0.94, 0.70, 0.24);
 uniform vec3 face_color_5 = vec3(0.90, 0.34, 0.70);
 uniform bool face_colors_enabled = true;
+
+// Curved Horizon Presentation (R1 GPU Position Curvature)
+uniform bool chp_gpu_effective = false;
+uniform int chp_debug_reconstruction_mode = 2; // 0 = flat baseline, 1 = identity reconstruction, 2 = CHP curved position
+uniform uint chp_function_class = 2u;
+uniform float chp_radius_m = 0.0;
+uniform float chp_inverse_radius = 0.0;
+uniform float chp_inverse_radius_squared = 0.0;
+uniform float chp_camera_altitude_m = 0.0;
+uniform float chp_certified_max_distance_m = 0.0;
+uniform float chp_certified_max_u = 0.0;
+uniform bool chp_debug_negative_height_color = false;
+uniform bool chp_debug_negative_height_exaggeration = false;
+
+// Canonical Root-Relative Noise Lattice Anchors (R1.2P Precision)
+uniform ivec3 terrain_root_cell_0 = ivec3(0);
+uniform ivec3 terrain_root_cell_1 = ivec3(0);
+uniform ivec3 terrain_root_cell_2 = ivec3(0);
+uniform ivec3 terrain_root_cell_3 = ivec3(0);
+uniform ivec3 terrain_root_cell_4 = ivec3(0);
+uniform ivec3 terrain_root_cell_5 = ivec3(0);
+uniform ivec3 terrain_root_cell_6 = ivec3(0);
+uniform ivec3 terrain_root_cell_7 = ivec3(0);
+
+uniform vec3 terrain_root_fraction_0 = vec3(0.0);
+uniform vec3 terrain_root_fraction_1 = vec3(0.0);
+uniform vec3 terrain_root_fraction_2 = vec3(0.0);
+uniform vec3 terrain_root_fraction_3 = vec3(0.0);
+uniform vec3 terrain_root_fraction_4 = vec3(0.0);
+uniform vec3 terrain_root_fraction_5 = vec3(0.0);
+uniform vec3 terrain_root_fraction_6 = vec3(0.0);
+uniform vec3 terrain_root_fraction_7 = vec3(0.0);
+
 varying vec2 canonical_domain_uv_m;
 varying float terrain_face;
 varying vec3 terrain_direction;
+varying float debug_final_y_m;
 
 // Canonical Bit-Noise Hash (Rule 4: SquirrelNoise5 v1)
 uint squirrel_noise5_u2_v1(uint x_bits, uint y_bits, uint seed) {
@@ -85,6 +119,86 @@ float squirrel_u01_24_v1(uint bits) {
 
 float smoothstep_val(float t) {
 	return t * t * (3.0 - 2.0 * t);
+}
+
+void get_terrain_root_anchor(uint oct, out ivec3 cell, out vec3 fraction) {
+	if (oct == 0u) { cell = terrain_root_cell_0; fraction = terrain_root_fraction_0; }
+	else if (oct == 1u) { cell = terrain_root_cell_1; fraction = terrain_root_fraction_1; }
+	else if (oct == 2u) { cell = terrain_root_cell_2; fraction = terrain_root_fraction_2; }
+	else if (oct == 3u) { cell = terrain_root_cell_3; fraction = terrain_root_fraction_3; }
+	else if (oct == 4u) { cell = terrain_root_cell_4; fraction = terrain_root_fraction_4; }
+	else if (oct == 5u) { cell = terrain_root_cell_5; fraction = terrain_root_fraction_5; }
+	else if (oct == 6u) { cell = terrain_root_cell_6; fraction = terrain_root_fraction_6; }
+	else { cell = terrain_root_cell_7; fraction = terrain_root_fraction_7; }
+}
+
+float sample_noise_3d_lattice(ivec3 root_cell, vec3 root_fraction, vec3 delta_phys, float frequency, uint seed) {
+	vec3 scaled_local = delta_phys * frequency;
+	vec3 rel_lattice = root_fraction + scaled_local;
+	vec3 floor_rel = floor(rel_lattice);
+	ivec3 cell_offset = ivec3(floor_rel);
+	ivec3 i0 = root_cell + cell_offset;
+	ivec3 i1 = i0 + ivec3(1);
+	vec3 f = rel_lattice - floor_rel;
+	vec3 t = vec3(smoothstep_val(f.x), smoothstep_val(f.y), smoothstep_val(f.z));
+
+	float n000 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i0.y), uint(i0.z), seed));
+	float n100 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i0.y), uint(i0.z), seed));
+	float n010 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i1.y), uint(i0.z), seed));
+	float n110 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i1.y), uint(i0.z), seed));
+	float n001 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i0.y), uint(i1.z), seed));
+	float n101 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i0.y), uint(i1.z), seed));
+	float n011 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i1.y), uint(i1.z), seed));
+	float n111 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i1.y), uint(i1.z), seed));
+
+	float nx00 = mix(n000, n100, t.x);
+	float nx10 = mix(n010, n110, t.x);
+	float nx01 = mix(n001, n101, t.x);
+	float nx11 = mix(n011, n111, t.x);
+
+	float ny0 = mix(nx00, nx10, t.y);
+	float ny1 = mix(nx01, nx11, t.y);
+
+	return mix(ny0, ny1, t.z);
+}
+
+vec4 sample_noise_3d_lattice_gradient(ivec3 root_cell, vec3 root_fraction, vec3 delta_phys, float frequency, uint seed) {
+	vec3 scaled_local = delta_phys * frequency;
+	vec3 rel_lattice = root_fraction + scaled_local;
+	vec3 floor_rel = floor(rel_lattice);
+	ivec3 cell_offset = ivec3(floor_rel);
+	ivec3 i0 = root_cell + cell_offset;
+	ivec3 i1 = i0 + ivec3(1);
+	vec3 f = rel_lattice - floor_rel;
+	vec3 t = vec3(smoothstep_val(f.x), smoothstep_val(f.y), smoothstep_val(f.z));
+	vec3 dt = 6.0 * f * (vec3(1.0) - f);
+
+	float n000 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i0.y), uint(i0.z), seed));
+	float n100 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i0.y), uint(i0.z), seed));
+	float n010 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i1.y), uint(i0.z), seed));
+	float n110 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i1.y), uint(i0.z), seed));
+	float n001 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i0.y), uint(i1.z), seed));
+	float n101 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i0.y), uint(i1.z), seed));
+	float n011 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i0.x), uint(i1.y), uint(i1.z), seed));
+	float n111 = squirrel_u01_24_v1(squirrel_noise5_u3_v1(uint(i1.x), uint(i1.y), uint(i1.z), seed));
+
+	float nx00 = mix(n000, n100, t.x);
+	float nx10 = mix(n010, n110, t.x);
+	float nx01 = mix(n001, n101, t.x);
+	float nx11 = mix(n011, n111, t.x);
+	float ny0 = mix(nx00, nx10, t.y);
+	float ny1 = mix(nx01, nx11, t.y);
+
+	float dx0 = mix((n100 - n000) * dt.x, (n110 - n010) * dt.x, t.y);
+	float dx1 = mix((n101 - n001) * dt.x, (n111 - n011) * dt.x, t.y);
+	float dy0 = (nx10 - nx00) * dt.y;
+	float dy1 = (nx11 - nx01) * dt.y;
+	vec3 gradient = vec3(
+		mix(dx0, dx1, t.z),
+		mix(dy0, dy1, t.z),
+		(ny1 - ny0) * dt.z
+	) * frequency;
+	return vec4(mix(ny0, ny1, t.z), gradient);
 }
 
 float sample_noise_3d(vec3 p_pos, float frequency, uint seed) {
@@ -236,6 +350,68 @@ code += R"(void canonicalize_face_uv(inout uint face, inout float u_m, inout flo
 			v_m = H - overshoot;
 		}
 	}
+}
+
+float eval_closed_analytic_height_lattice(vec3 delta_phys) {
+	float amp = 1.0;
+	float freq = continental_frequency;
+	float total_elev = 0.0;
+	float max_poss = 0.0;
+
+	for (uint oct = 0u; oct < octave_count; ++oct) {
+		uint salt = oct * 1013u;
+		uint seed = terrain_seed ^ salt;
+		ivec3 rcell;
+		vec3 rfrac;
+		get_terrain_root_anchor(oct, rcell, rfrac);
+		float n = sample_noise_3d_lattice(rcell, rfrac, delta_phys, freq, seed);
+		total_elev += n * amp;
+		max_poss += amp;
+
+		amp *= persistence;
+		freq *= lacunarity;
+	}
+
+	float norm01 = total_elev / max_poss;
+	if (norm01 < 0.5) {
+		float t = norm01 * 2.0;
+		return min_elevation * (1.0 - t);
+	} else {
+		float t = (norm01 - 0.5) * 2.0;
+		return max_elevation * t;
+	}
+}
+
+vec4 eval_closed_analytic_height_gradient_lattice(vec3 delta_phys) {
+	float amp = 1.0;
+	float freq = continental_frequency;
+	float total_elev = 0.0;
+	float max_poss = 0.0;
+	vec3 total_gradient = vec3(0.0);
+
+	for (uint oct = 0u; oct < octave_count; ++oct) {
+		uint seed = terrain_seed ^ (oct * 1013u);
+		ivec3 rcell;
+		vec3 rfrac;
+		get_terrain_root_anchor(oct, rcell, rfrac);
+		vec4 noise = sample_noise_3d_lattice_gradient(rcell, rfrac, delta_phys, freq, seed);
+		total_elev += noise.x * amp;
+		total_gradient += noise.yzw * amp;
+		max_poss += amp;
+		amp *= persistence;
+		freq *= lacunarity;
+	}
+
+	float norm01 = total_elev / max_poss;
+	vec3 normalized_gradient = total_gradient / max_poss;
+	if (norm01 < 0.5) {
+		return vec4(
+			min_elevation * (1.0 - norm01 * 2.0),
+			normalized_gradient * (-2.0 * min_elevation));
+	}
+	return vec4(
+		max_elevation * ((norm01 - 0.5) * 2.0),
+		normalized_gradient * (2.0 * max_elevation));
 }
 
 float eval_closed_analytic_height_direction(vec3 dir) {
@@ -525,13 +701,25 @@ float eval_instance_analytic_height(
 ) {
 	if (uses_logical_chart && world_domain_topology != 0u) {
 		vec2 root_delta_m = logical_chart_root_delta_m(coord_u, coord_v, plane_m);
-		vec3 angular_tangent =
-			root_delta_m.x * multinet_bccm_v5_presentation_x_tangent +
-			root_delta_m.y * multinet_bccm_v5_presentation_z_tangent;
-		vec3 direction = uses_bounded_logical_chart
-			? normalize(multinet_bccm_v5_root_direction + angular_tangent)
-			: local_exp_chart_direction(multinet_bccm_v5_root_direction, angular_tangent);
-		return eval_closed_analytic_height_direction(normalize(direction));
+		vec3 tangent_u = multinet_bccm_v5_presentation_x_tangent;
+		vec3 tangent_v = multinet_bccm_v5_presentation_z_tangent;
+		vec3 angular_tangent = root_delta_m.x * tangent_u + root_delta_m.y * tangent_v;
+		float q = dot(angular_tangent, angular_tangent);
+		float sinc_val;
+		float cos_minus_one;
+		if (q > 2.4674011) {
+			float angle = sqrt(q);
+			sinc_val = sin(angle) / angle;
+			cos_minus_one = cos(angle) - 1.0;
+		} else {
+			float q2 = q * q;
+			float q3 = q2 * q;
+			sinc_val = 1.0 - q / 6.0 + q2 / 120.0 - q3 / 5040.0;
+			cos_minus_one = -0.5 * q + q2 / 24.0 - q3 / 720.0;
+		}
+		vec3 delta_phys = (sinc_val * logical_area_radius_m) * angular_tangent +
+		                  (cos_minus_one * logical_area_radius_m) * multinet_bccm_v5_root_direction;
+		return eval_closed_analytic_height_lattice(delta_phys);
 	}
 	vec2 uv_m = instance_chart_uv(
 		coord_u, coord_v, orientation, uses_sample_patch, uses_coherent_unfolding, plane_m);
@@ -542,6 +730,34 @@ float finite_axis_slope(float center, float plus, float minus, float coordinate,
 	if (coordinate <= -half_extent + ds) return (plus - center) / ds;
 	if (coordinate >= half_extent - ds) return (center - minus) / ds;
 	return (plus - minus) / (2.0 * ds);
+}
+
+vec3 eval_chp_curved_surface_position(vec2 q, float height_m) {
+	float d2 = dot(q, q);
+	if (chp_function_class == 0u) {
+		float drop = d2 * 0.5 * chp_inverse_radius;
+		return vec3(q.x, height_m - drop, q.y);
+	}
+	float u = d2 * chp_inverse_radius_squared;
+	float a = 1.0;
+	float b = 0.0;
+	float c = 1.0;
+	float u2 = u * u;
+	if (chp_function_class == 1u) {
+		a = 1.0 - u / 6.0 + u2 / 120.0;
+		b = u / 2.0 - u2 / 24.0;
+		c = 1.0 - u / 2.0 + u2 / 24.0;
+	} else {
+		float u3 = u2 * u;
+		a = 1.0 - u / 6.0 + u2 / 120.0 - u3 / 5040.0;
+		b = u / 2.0 - u2 / 24.0 + u3 / 720.0;
+		c = 1.0 - u / 2.0 + u2 / 24.0 - u3 / 720.0;
+	}
+	vec3 base_pos = vec3(a * q.x, -chp_radius_m * b, a * q.y);
+	vec3 raw_axis = vec3(a * q.x * chp_inverse_radius, c, a * q.y * chp_inverse_radius);
+	float raw_len = length(raw_axis);
+	vec3 axis = raw_len > 1.0e-15 ? raw_axis / raw_len : vec3(0.0, 1.0, 0.0);
+	return base_pos + height_m * axis;
 }
 
 void vertex() {
@@ -613,14 +829,35 @@ void vertex() {
 	vec3 logical_direction = vec3(0.0);
 	vec3 logical_direction_u = vec3(0.0);
 	vec3 logical_direction_v = vec3(0.0);
+	vec3 delta_phys = vec3(0.0);
 	if (uses_logical_analytic_gradient) {
+		vec2 root_delta_m = logical_chart_root_delta_m(coord_u, coord_v, plane_m);
 		logical_chart_direction_jacobian(
-			logical_chart_root_delta_m(coord_u, coord_v, plane_m),
+			root_delta_m,
 			uses_bounded_logical_chart,
 			logical_direction,
 			logical_direction_u,
 			logical_direction_v);
 		terrain_direction = logical_direction;
+
+		vec3 tangent_u = multinet_bccm_v5_presentation_x_tangent;
+		vec3 tangent_v = multinet_bccm_v5_presentation_z_tangent;
+		vec3 angular_tangent = root_delta_m.x * tangent_u + root_delta_m.y * tangent_v;
+		float q = dot(angular_tangent, angular_tangent);
+		float sinc_val;
+		float cos_minus_one;
+		if (q > 2.4674011) {
+			float angle = sqrt(q);
+			sinc_val = sin(angle) / angle;
+			cos_minus_one = cos(angle) - 1.0;
+		} else {
+			float q2 = q * q;
+			float q3 = q2 * q;
+			sinc_val = 1.0 - q / 6.0 + q2 / 120.0 - q3 / 5040.0;
+			cos_minus_one = -0.5 * q + q2 / 24.0 - q3 / 720.0;
+		}
+		delta_phys = (sinc_val * logical_area_radius_m) * angular_tangent +
+		             (cos_minus_one * logical_area_radius_m) * multinet_bccm_v5_root_direction;
 	} else {
 		terrain_direction = world_domain_topology != 0u
 			? eval_instance_closed_direction(
@@ -630,7 +867,7 @@ void vertex() {
 	}
 
 	vec4 logical_height_gradient = uses_logical_analytic_gradient
-		? eval_closed_analytic_height_gradient_direction(terrain_direction)
+		? eval_closed_analytic_height_gradient_lattice(delta_phys)
 		: vec4(0.0);
 	// The analytic gradient already carries the exact centre height. Re-running
 	// all noise octaves here doubled the closed-world vertex cost for no result.
@@ -730,6 +967,47 @@ void vertex() {
 	vec3 dv = vec3(0.0, analytic_slope_v, 1.0);
 
 	NORMAL = normalize(cross(dv, du));
+
+	debug_final_y_m = final_y;
+	float presented_final_y = final_y;
+	if (chp_debug_negative_height_exaggeration && final_y < 0.0) {
+		presented_final_y = final_y * 10.0;
+	}
+
+	if (chp_gpu_effective && uses_camera_relative_render && chp_debug_reconstruction_mode > 0) {
+		vec3 flat_model = vec3(VERTEX.x, presented_final_y, VERTEX.z);
+		vec3 flat_camera_relative = (MODEL_MATRIX * vec4(flat_model, 1.0)).xyz;
+
+		vec3 target_camera_relative;
+		if (chp_debug_reconstruction_mode == 1) {
+			// Mode 1: Identity reconstruction (flat target)
+			target_camera_relative = flat_camera_relative;
+		} else {
+			// Mode 2: CHP curved position
+			vec2 q = flat_camera_relative.xz;
+			vec3 p_surface = eval_chp_curved_surface_position(q, presented_final_y);
+			target_camera_relative = p_surface - vec3(0.0, chp_camera_altitude_m, 0.0);
+		}
+
+		// Exact inverse reconstruction for orthogonal scaled model basis
+		vec3 bx = MODEL_MATRIX[0].xyz;
+		vec3 by = MODEL_MATRIX[1].xyz;
+		vec3 bz = MODEL_MATRIX[2].xyz;
+		float bx2 = dot(bx, bx);
+		float by2 = dot(by, by);
+		float bz2 = dot(bz, bz);
+
+		if (bx2 > 1e-12 && by2 > 1e-12 && bz2 > 1e-12) {
+			vec3 delta = target_camera_relative - MODEL_MATRIX[3].xyz;
+			vec3 model_local_target = vec3(
+				dot(delta, bx) / bx2,
+				dot(delta, by) / by2,
+				dot(delta, bz) / bz2
+			);
+			VERTEX = model_local_target;
+		}
+	}
+
 	if (uses_camera_relative_render) {
 		// MODEL_MATRIX contains the small observer-relative MultiMesh transform.
 		// Strip the editor camera translation from the view matrix before Godot's
@@ -757,6 +1035,13 @@ void fragment() {
 		else if (face_index == 3u) base_color = face_color_3;
 		else if (face_index == 4u) base_color = face_color_4;
 		else base_color = face_color_5;
+	}
+	if (chp_debug_negative_height_color) {
+		if (debug_final_y_m < 0.0) {
+			base_color = vec3(0.1, 0.2, 0.9); // Deep blue for negative height
+		} else {
+			base_color = vec3(0.9, 0.8, 0.2); // Golden yellow for nonnegative height
+		}
 	}
 	ALBEDO = base_color;
 }

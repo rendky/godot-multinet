@@ -70,6 +70,46 @@ void set_v5_chart_globals(
 }
 #endif
 
+struct TerrainRootLatticeAnchors {
+	int32_t cell[8][3]{};
+	float fraction[8][3]{};
+};
+
+inline TerrainRootLatticeAnchors compute_root_anchors(
+	const Multinet::FramePosition64& root_direction,
+	double radius_m,
+	const Multinet::TerrainRecipe& recipe
+) {
+	TerrainRootLatticeAnchors anchors{};
+	const double px = root_direction.x * radius_m;
+	const double py = root_direction.y * radius_m;
+	const double pz = root_direction.z * radius_m;
+
+	double freq = recipe.legacy_signals.continental_frequency;
+	const uint8_t octaves = std::min<uint8_t>(recipe.legacy_signals.octave_count, 8);
+
+	for (uint8_t oct = 0; oct < octaves; ++oct) {
+		double sx = px * freq;
+		double sy = py * freq;
+		double sz = pz * freq;
+
+		double fx = std::floor(sx);
+		double fy = std::floor(sy);
+		double fz = std::floor(sz);
+
+		anchors.cell[oct][0] = static_cast<int32_t>(fx);
+		anchors.cell[oct][1] = static_cast<int32_t>(fy);
+		anchors.cell[oct][2] = static_cast<int32_t>(fz);
+
+		anchors.fraction[oct][0] = static_cast<float>(sx - fx);
+		anchors.fraction[oct][1] = static_cast<float>(sy - fy);
+		anchors.fraction[oct][2] = static_cast<float>(sz - fz);
+
+		freq *= static_cast<double>(recipe.legacy_signals.lacunarity);
+	}
+	return anchors;
+}
+
 bool try_make_canonical_block_key(
 	Multinet::SurfaceFace face,
 	int64_t block_u,
@@ -517,6 +557,8 @@ void BlockClipmapRenderer::bind_material_uniforms(
 	const Multinet::TerrainRecipe& recipe,
 	const Multinet::WorldScaleManifest& scale
 ) {
+	cached_recipe_ = recipe;
+	cached_scale_ = scale;
 #ifndef MULTINET_TEST
 	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
 	if (!rs) return;
@@ -547,6 +589,36 @@ void BlockClipmapRenderer::bind_material_uniforms(
 		rs->material_set_param(mat, "face_color_4", godot::Vector3(0.94f, 0.70f, 0.24f));
 		rs->material_set_param(mat, "face_color_5", godot::Vector3(0.90f, 0.34f, 0.70f));
 		rs->material_set_param(mat, "face_colors_enabled", face_colors_enabled);
+		rs->material_set_param(mat, "chp_gpu_effective", false);
+		rs->material_set_param(mat, "chp_function_class", 2u);
+		rs->material_set_param(mat, "chp_radius_m", 0.0f);
+		rs->material_set_param(mat, "chp_inverse_radius", 0.0f);
+		rs->material_set_param(mat, "chp_inverse_radius_squared", 0.0f);
+		rs->material_set_param(mat, "chp_camera_altitude_m", 0.0f);
+		rs->material_set_param(mat, "chp_certified_max_distance_m", 0.0f);
+		rs->material_set_param(mat, "chp_certified_max_u", 0.0f);
+		rs->material_set_param(mat, "chp_debug_reconstruction_mode", chp_debug_reconstruction_mode);
+		rs->material_set_param(mat, "chp_debug_negative_height_color", chp_debug_negative_height_color);
+		rs->material_set_param(mat, "chp_debug_negative_height_exaggeration", chp_debug_negative_height_exaggeration);
+
+		const TerrainRootLatticeAnchors initial_anchors = compute_root_anchors(Multinet::FramePosition64{ 1.0, 0.0, 0.0 }, scale.logical_area_radius_m, recipe);
+		rs->material_set_param(mat, "terrain_root_cell_0", godot::Vector3i(initial_anchors.cell[0][0], initial_anchors.cell[0][1], initial_anchors.cell[0][2]));
+		rs->material_set_param(mat, "terrain_root_cell_1", godot::Vector3i(initial_anchors.cell[1][0], initial_anchors.cell[1][1], initial_anchors.cell[1][2]));
+		rs->material_set_param(mat, "terrain_root_cell_2", godot::Vector3i(initial_anchors.cell[2][0], initial_anchors.cell[2][1], initial_anchors.cell[2][2]));
+		rs->material_set_param(mat, "terrain_root_cell_3", godot::Vector3i(initial_anchors.cell[3][0], initial_anchors.cell[3][1], initial_anchors.cell[3][2]));
+		rs->material_set_param(mat, "terrain_root_cell_4", godot::Vector3i(initial_anchors.cell[4][0], initial_anchors.cell[4][1], initial_anchors.cell[4][2]));
+		rs->material_set_param(mat, "terrain_root_cell_5", godot::Vector3i(initial_anchors.cell[5][0], initial_anchors.cell[5][1], initial_anchors.cell[5][2]));
+		rs->material_set_param(mat, "terrain_root_cell_6", godot::Vector3i(initial_anchors.cell[6][0], initial_anchors.cell[6][1], initial_anchors.cell[6][2]));
+		rs->material_set_param(mat, "terrain_root_cell_7", godot::Vector3i(initial_anchors.cell[7][0], initial_anchors.cell[7][1], initial_anchors.cell[7][2]));
+
+		rs->material_set_param(mat, "terrain_root_fraction_0", godot::Vector3(initial_anchors.fraction[0][0], initial_anchors.fraction[0][1], initial_anchors.fraction[0][2]));
+		rs->material_set_param(mat, "terrain_root_fraction_1", godot::Vector3(initial_anchors.fraction[1][0], initial_anchors.fraction[1][1], initial_anchors.fraction[1][2]));
+		rs->material_set_param(mat, "terrain_root_fraction_2", godot::Vector3(initial_anchors.fraction[2][0], initial_anchors.fraction[2][1], initial_anchors.fraction[2][2]));
+		rs->material_set_param(mat, "terrain_root_fraction_3", godot::Vector3(initial_anchors.fraction[3][0], initial_anchors.fraction[3][1], initial_anchors.fraction[3][2]));
+		rs->material_set_param(mat, "terrain_root_fraction_4", godot::Vector3(initial_anchors.fraction[4][0], initial_anchors.fraction[4][1], initial_anchors.fraction[4][2]));
+		rs->material_set_param(mat, "terrain_root_fraction_5", godot::Vector3(initial_anchors.fraction[5][0], initial_anchors.fraction[5][1], initial_anchors.fraction[5][2]));
+		rs->material_set_param(mat, "terrain_root_fraction_6", godot::Vector3(initial_anchors.fraction[6][0], initial_anchors.fraction[6][1], initial_anchors.fraction[6][2]));
+		rs->material_set_param(mat, "terrain_root_fraction_7", godot::Vector3(initial_anchors.fraction[7][0], initial_anchors.fraction[7][1], initial_anchors.fraction[7][2]));
 	}
 #endif
 }
@@ -582,6 +654,17 @@ void BlockClipmapRenderer::bind_material_uniforms(
 		rs->material_set_param(mat, "finite_half_extent_z_m", static_cast<float>(domain.finite.half_extent_z_mm) * 0.001f);
 		rs->material_set_param(mat, "analytic_normal_sample_step_m", Multinet::CANONICAL_ANALYTIC_NORMAL_SAMPLE_STEP_M);
 		rs->material_set_param(mat, "face_colors_enabled", face_colors_enabled);
+		rs->material_set_param(mat, "chp_gpu_effective", false);
+		rs->material_set_param(mat, "chp_function_class", 2u);
+		rs->material_set_param(mat, "chp_radius_m", 0.0f);
+		rs->material_set_param(mat, "chp_inverse_radius", 0.0f);
+		rs->material_set_param(mat, "chp_inverse_radius_squared", 0.0f);
+		rs->material_set_param(mat, "chp_camera_altitude_m", 0.0f);
+		rs->material_set_param(mat, "chp_certified_max_distance_m", 0.0f);
+		rs->material_set_param(mat, "chp_certified_max_u", 0.0f);
+		rs->material_set_param(mat, "chp_debug_reconstruction_mode", chp_debug_reconstruction_mode);
+		rs->material_set_param(mat, "chp_debug_negative_height_color", chp_debug_negative_height_color);
+		rs->material_set_param(mat, "chp_debug_negative_height_exaggeration", chp_debug_negative_height_exaggeration);
 	}
 #endif
 }
@@ -613,30 +696,173 @@ void BlockClipmapRenderer::set_diamond_triangulation_enabled(bool enabled) noexc
 #endif
 }
 
-void BlockClipmapRenderer::rebase_frozen_presentation(const godot::Vector3& p_camera_world_position) noexcept {
+void BlockClipmapRenderer::update_frozen_view_presentation_delta(
+	const godot::Vector3& p_camera_delta,
+	const multinet::rendering::chp::CurvedHorizonView* chp_view
+) noexcept {
+	const bool chp_effective = chp_view && chp_view->chp_effective && has_active_presentation_binding;
+	last_bound_chp_gpu_effective_ = chp_effective;
+	if (chp_effective) {
+		last_bound_chp_camera_altitude_m_ = static_cast<float>(chp_view->camera_surface_height_m);
+	}
+
 #ifndef MULTINET_TEST
 	if (!is_initialized || !has_active_presentation_binding) return;
 	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
 	if (!rs) return;
-	const godot::Vector3 delta = active_view_world_position - p_camera_world_position;
-	if (delta.length_squared() <= 1e-12f) return;
-	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
-		LODLevelData& level = levels[lod];
-		if (!level.multimesh_rid.is_valid() || level.last_visible_count == 0) continue;
-		godot::PackedFloat32Array& buffer = multimesh_gpu_buffers[lod][level.submitted_buffer_index];
-		float* values = buffer.ptrw();
-		for (uint32_t i = 0; i < level.last_visible_count; ++i) {
-			const size_t base = static_cast<size_t>(i) * 16u;
-			values[base + 3] += delta.x;
-			values[base + 7] += delta.y;
-			values[base + 11] += delta.z;
+
+	// A. Apply continuous camera delta to submitted MultiMesh instances
+	if (p_camera_delta.length_squared() > 1e-12f) {
+		for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+			LODLevelData& level = levels[lod];
+			if (!level.multimesh_rid.is_valid() || level.last_visible_count == 0) continue;
+			godot::PackedFloat32Array& buffer = multimesh_gpu_buffers[lod][level.submitted_buffer_index];
+			float* values = buffer.ptrw();
+			for (uint32_t i = 0; i < level.last_visible_count; ++i) {
+				const size_t base = static_cast<size_t>(i) * 16u;
+				values[base + 3] -= p_camera_delta.x;
+				values[base + 7] -= p_camera_delta.y;
+				values[base + 11] -= p_camera_delta.z;
+			}
+			rs->multimesh_set_buffer(level.multimesh_rid, buffer);
 		}
-		rs->multimesh_set_buffer(level.multimesh_rid, buffer);
+		active_view_world_position += p_camera_delta;
+
+		// Shift frozen frustum debug visualization instance by -delta so it stays fixed in world space
+		if (has_frozen_frustum_ && frozen_frustum_instance_rid_.is_valid()) {
+			frozen_frustum_transform_.origin -= p_camera_delta;
+			rs->instance_set_transform(frozen_frustum_instance_rid_, frozen_frustum_transform_);
+		}
 	}
-	active_view_world_position = p_camera_world_position;
+
+	// B. Refresh view-dependent CHP GPU state
+	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+		godot::RID material = levels[lod].material_rid;
+		if (!material.is_valid()) continue;
+		rs->material_set_param(material, "chp_gpu_effective", chp_effective);
+		if (chp_effective) {
+			rs->material_set_param(material, "chp_camera_altitude_m", static_cast<float>(chp_view->camera_surface_height_m));
+		}
+	}
 #else
-	(void)p_camera_world_position;
+	// In test mode: apply translation delta to local test ring buffers
+	if (p_camera_delta.length_squared() > 1e-12f) {
+		for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+			LODLevelData& level = levels[lod];
+			if (level.last_visible_count == 0) continue;
+			auto& ring_buf = multimesh_ring_buffers[lod][level.submitted_buffer_index];
+			for (uint32_t i = 0; i < level.last_visible_count; ++i) {
+				const size_t base = static_cast<size_t>(i) * 16u;
+				if (base + 11 < ring_buf.size()) {
+					ring_buf[base + 3] -= p_camera_delta.x;
+					ring_buf[base + 7] -= p_camera_delta.y;
+					ring_buf[base + 11] -= p_camera_delta.z;
+				}
+			}
+		}
+		active_view_world_position += p_camera_delta;
+	}
 #endif
+}
+
+void BlockClipmapRenderer::update_frozen_view_presentation(
+	const godot::Vector3& p_camera_world_position,
+	const multinet::rendering::chp::CurvedHorizonView* chp_view
+) noexcept {
+	const godot::Vector3 delta = p_camera_world_position - active_view_world_position;
+	update_frozen_view_presentation_delta(delta, chp_view);
+}
+
+void BlockClipmapRenderer::set_frozen_frustum_visualization(
+	const godot::Transform3D& camera_transform,
+	float fov_deg,
+	float near_m,
+	float far_m,
+	float aspect
+) noexcept {
+#ifndef MULTINET_TEST
+	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
+	if (!rs || !scenario_rid.is_valid()) return;
+
+	clear_frozen_frustum_visualization();
+
+	const float vis_near = std::max(0.1f, near_m);
+	const float vis_far = std::min(far_m, 5000.0f);
+	const float half_fov_rad = godot::Math::deg_to_rad(fov_deg * 0.5f);
+	const float tan_half = std::tan(half_fov_rad);
+
+	const float near_h = 2.0f * vis_near * tan_half;
+	const float near_w = near_h * aspect;
+	const float far_h = 2.0f * vis_far * tan_half;
+	const float far_w = far_h * aspect;
+
+	const godot::Vector3 nlb(-near_w * 0.5f, -near_h * 0.5f, -vis_near);
+	const godot::Vector3 nrb( near_w * 0.5f, -near_h * 0.5f, -vis_near);
+	const godot::Vector3 nrt( near_w * 0.5f,  near_h * 0.5f, -vis_near);
+	const godot::Vector3 nlt(-near_w * 0.5f,  near_h * 0.5f, -vis_near);
+
+	const godot::Vector3 flb(-far_w * 0.5f, -far_h * 0.5f, -vis_far);
+	const godot::Vector3 frb( far_w * 0.5f, -far_h * 0.5f, -vis_far);
+	const godot::Vector3 frt( far_w * 0.5f,  far_h * 0.5f, -vis_far);
+	const godot::Vector3 flt(-far_w * 0.5f,  far_h * 0.5f, -vis_far);
+
+	const godot::Basis& b = camera_transform.basis;
+	const auto xform = [&](const godot::Vector3& p) {
+		return b.xform(p);
+	};
+
+	godot::PackedVector3Array vertices;
+	vertices.resize(24);
+	// Near plane rect
+	vertices[0] = xform(nlb); vertices[1] = xform(nrb);
+	vertices[2] = xform(nrb); vertices[3] = xform(nrt);
+	vertices[4] = xform(nrt); vertices[5] = xform(nlt);
+	vertices[6] = xform(nlt); vertices[7] = xform(nlb);
+	// Far plane rect
+	vertices[8]  = xform(flb); vertices[9]  = xform(frb);
+	vertices[10] = xform(frb); vertices[11] = xform(frt);
+	vertices[12] = xform(frt); vertices[13] = xform(flt);
+	vertices[14] = xform(flt); vertices[15] = xform(flb);
+	// Connecting rays
+	vertices[16] = xform(nlb); vertices[17] = xform(flb);
+	vertices[18] = xform(nrb); vertices[19] = xform(frb);
+	vertices[20] = xform(nrt); vertices[21] = xform(frt);
+	vertices[22] = xform(nlt); vertices[23] = xform(flt);
+
+	godot::Array arrays;
+	arrays.resize(godot::RenderingServer::ARRAY_MAX);
+	arrays[godot::RenderingServer::ARRAY_VERTEX] = vertices;
+
+	frozen_frustum_mesh_rid_ = rs->mesh_create();
+	rs->mesh_add_surface_from_arrays(frozen_frustum_mesh_rid_, godot::RenderingServer::PRIMITIVE_LINES, arrays);
+
+	frozen_frustum_instance_rid_ = rs->instance_create();
+	rs->instance_set_base(frozen_frustum_instance_rid_, frozen_frustum_mesh_rid_);
+	rs->instance_set_scenario(frozen_frustum_instance_rid_, scenario_rid);
+	frozen_frustum_transform_ = godot::Transform3D();
+	rs->instance_set_transform(frozen_frustum_instance_rid_, frozen_frustum_transform_);
+	has_frozen_frustum_ = true;
+#else
+	has_frozen_frustum_ = true;
+#endif
+}
+
+void BlockClipmapRenderer::clear_frozen_frustum_visualization() noexcept {
+#ifndef MULTINET_TEST
+	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
+	if (rs) {
+		if (frozen_frustum_instance_rid_.is_valid()) {
+			rs->free_rid(frozen_frustum_instance_rid_);
+			frozen_frustum_instance_rid_ = godot::RID();
+		}
+		if (frozen_frustum_mesh_rid_.is_valid()) {
+			rs->free_rid(frozen_frustum_mesh_rid_);
+			frozen_frustum_mesh_rid_ = godot::RID();
+		}
+	}
+#endif
+	has_frozen_frustum_ = false;
+	frozen_frustum_transform_ = godot::Transform3D();
 }
 
 void BlockClipmapRenderer::initialize_cpu_state_for_test(
@@ -700,6 +926,7 @@ void BlockClipmapRenderer::initialize_cpu_state_for_test(
 }
 
 void BlockClipmapRenderer::cleanup() {
+	clear_frozen_frustum_visualization();
 #ifndef MULTINET_TEST
 	godot::RenderingServer *rs = godot::RenderingServer::get_singleton();
 
@@ -833,7 +1060,8 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 	const Multinet::WorldScaleManifest& scale,
 	const BCCMCameraState& cam_state,
 	const BCCMSourceExpectation& expectation,
-	Multinet::TerrainRenderSource* terrain_source
+	Multinet::TerrainRenderSource* terrain_source,
+	const multinet::rendering::chp::CurvedHorizonView* chp_view
 ) {
 	TerrainUpdateResult result;
 	if (!is_initialized) return result;
@@ -1156,6 +1384,10 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 				global_aabb.position += active_view_world_position;
 			}
 			bool is_visible = frustum.intersects_aabb(global_aabb);
+			if (chp_view && chp_view->chp_effective && has_active_presentation_binding) {
+				// R1: Conservative debug culling under CHP - frustum culling bypassed
+				is_visible = true;
+			}
 
 			uint8_t edge_mask = 0;
 			if (du == r - 1) edge_mask |= 1;
@@ -1972,7 +2204,8 @@ void BlockClipmapRenderer::update_with_view(
 	const Multinet::WorldScaleManifest& scale,
 	const BCCMCameraState& cam_state,
 	const BCCMSourceExpectation& expectation,
-	Multinet::TerrainRenderSource* terrain_source
+	Multinet::TerrainRenderSource* terrain_source,
+	const multinet::rendering::chp::CurvedHorizonView* chp_view
 ) {
 	if (!is_initialized) return;
 	if (!cam_state.is_visible) return;
@@ -2033,6 +2266,31 @@ void BlockClipmapRenderer::update_with_view(
 						rs->material_set_param(material, "logical_chart_presentation_z_tangent", presentation_z_tangent);
 					}
 				}
+
+				const double area_radius_m = cached_scale_.logical_area_radius_m > 0.0 ? cached_scale_.logical_area_radius_m : scale.logical_area_radius_m;
+				const TerrainRootLatticeAnchors anchors = compute_root_anchors(logical_chart.root_direction, area_radius_m, cached_recipe_);
+
+				for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+					godot::RID material = levels[lod].material_rid;
+					if (!material.is_valid()) continue;
+					rs->material_set_param(material, "terrain_root_cell_0", godot::Vector3i(anchors.cell[0][0], anchors.cell[0][1], anchors.cell[0][2]));
+					rs->material_set_param(material, "terrain_root_cell_1", godot::Vector3i(anchors.cell[1][0], anchors.cell[1][1], anchors.cell[1][2]));
+					rs->material_set_param(material, "terrain_root_cell_2", godot::Vector3i(anchors.cell[2][0], anchors.cell[2][1], anchors.cell[2][2]));
+					rs->material_set_param(material, "terrain_root_cell_3", godot::Vector3i(anchors.cell[3][0], anchors.cell[3][1], anchors.cell[3][2]));
+					rs->material_set_param(material, "terrain_root_cell_4", godot::Vector3i(anchors.cell[4][0], anchors.cell[4][1], anchors.cell[4][2]));
+					rs->material_set_param(material, "terrain_root_cell_5", godot::Vector3i(anchors.cell[5][0], anchors.cell[5][1], anchors.cell[5][2]));
+					rs->material_set_param(material, "terrain_root_cell_6", godot::Vector3i(anchors.cell[6][0], anchors.cell[6][1], anchors.cell[6][2]));
+					rs->material_set_param(material, "terrain_root_cell_7", godot::Vector3i(anchors.cell[7][0], anchors.cell[7][1], anchors.cell[7][2]));
+
+					rs->material_set_param(material, "terrain_root_fraction_0", godot::Vector3(anchors.fraction[0][0], anchors.fraction[0][1], anchors.fraction[0][2]));
+					rs->material_set_param(material, "terrain_root_fraction_1", godot::Vector3(anchors.fraction[1][0], anchors.fraction[1][1], anchors.fraction[1][2]));
+					rs->material_set_param(material, "terrain_root_fraction_2", godot::Vector3(anchors.fraction[2][0], anchors.fraction[2][1], anchors.fraction[2][2]));
+					rs->material_set_param(material, "terrain_root_fraction_3", godot::Vector3(anchors.fraction[3][0], anchors.fraction[3][1], anchors.fraction[3][2]));
+					rs->material_set_param(material, "terrain_root_fraction_4", godot::Vector3(anchors.fraction[4][0], anchors.fraction[4][1], anchors.fraction[4][2]));
+					rs->material_set_param(material, "terrain_root_fraction_5", godot::Vector3(anchors.fraction[5][0], anchors.fraction[5][1], anchors.fraction[5][2]));
+					rs->material_set_param(material, "terrain_root_fraction_6", godot::Vector3(anchors.fraction[6][0], anchors.fraction[6][1], anchors.fraction[6][2]));
+					rs->material_set_param(material, "terrain_root_fraction_7", godot::Vector3(anchors.fraction[7][0], anchors.fraction[7][1], anchors.fraction[7][2]));
+				}
 				bound_logical_chart_root_ = encoded_root;
 				bound_logical_chart_root_presentation_x_m_ = root_presentation_x;
 				bound_logical_chart_root_presentation_z_m_ = root_presentation_z;
@@ -2041,7 +2299,30 @@ void BlockClipmapRenderer::update_with_view(
 		}
 	}
 
-	TerrainUpdateResult result = compute_update(p_camera_world_position, p_frustum, scale, cam_state, expectation, terrain_source);
+	const bool chp_effective = chp_view && chp_view->chp_effective && cam_state.has_presentation_binding;
+	last_bound_chp_gpu_effective_ = chp_effective;
+	if (chp_effective) {
+		last_bound_chp_camera_altitude_m_ = static_cast<float>(chp_view->camera_surface_height_m);
+	}
+	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+		godot::RID material = levels[lod].material_rid;
+		if (!material.is_valid()) continue;
+		rs->material_set_param(material, "chp_gpu_effective", chp_effective);
+		if (chp_effective) {
+			rs->material_set_param(material, "chp_function_class", static_cast<uint32_t>(chp_view->profile.requested.function_class));
+			rs->material_set_param(material, "chp_radius_m", static_cast<float>(chp_view->profile.radius_m));
+			rs->material_set_param(material, "chp_inverse_radius", static_cast<float>(chp_view->profile.inverse_radius));
+			rs->material_set_param(material, "chp_inverse_radius_squared", static_cast<float>(chp_view->profile.inverse_radius_squared));
+			rs->material_set_param(material, "chp_camera_altitude_m", static_cast<float>(chp_view->camera_surface_height_m));
+			rs->material_set_param(material, "chp_certified_max_distance_m", static_cast<float>(chp_view->profile.certified_maximum_deformation_distance_m));
+			rs->material_set_param(material, "chp_certified_max_u", static_cast<float>(chp_view->profile.certified_maximum_u));
+			rs->material_set_param(material, "chp_debug_reconstruction_mode", chp_debug_reconstruction_mode);
+			rs->material_set_param(material, "chp_debug_negative_height_color", chp_debug_negative_height_color);
+			rs->material_set_param(material, "chp_debug_negative_height_exaggeration", chp_debug_negative_height_exaggeration);
+		}
+	}
+
+	TerrainUpdateResult result = compute_update(p_camera_world_position, p_frustum, scale, cam_state, expectation, terrain_source, chp_view);
 
 	// Phase 6 — two-phase GPU finalization: re-validate each upload before committing.
 	auto patch_rejected = [&](uint8_t failed_lod, uint32_t failed_layer, const char* reason) {
@@ -2143,12 +2424,13 @@ void BlockClipmapRenderer::update(
 	const Multinet::WorldScaleManifest& scale,
 	const BCCMCameraState& cam_state,
 	const BCCMSourceExpectation& expectation,
-	Multinet::TerrainRenderSource* terrain_source
+	Multinet::TerrainRenderSource* terrain_source,
+	const multinet::rendering::chp::CurvedHorizonView* chp_view
 ) {
 	if (!p_camera) return;
 	godot::Vector3 cam_pos = p_camera->get_global_position();
 	FrustumPlanes frustum = FrustumPlanes::extract_from_camera(p_camera);
-	update_with_view(cam_pos, frustum, scale, cam_state, expectation, terrain_source);
+	update_with_view(cam_pos, frustum, scale, cam_state, expectation, terrain_source, chp_view);
 }
 #else
 void BlockClipmapRenderer::update_with_view(
@@ -2157,7 +2439,8 @@ void BlockClipmapRenderer::update_with_view(
 	const Multinet::WorldScaleManifest& scale,
 	const BCCMCameraState& cam_state,
 	const BCCMSourceExpectation& expectation,
-	Multinet::TerrainRenderSource* terrain_source
+	Multinet::TerrainRenderSource* terrain_source,
+	const multinet::rendering::chp::CurvedHorizonView* chp_view
 ) {}
 
 void BlockClipmapRenderer::update(
@@ -2165,7 +2448,8 @@ void BlockClipmapRenderer::update(
 	const Multinet::WorldScaleManifest& scale,
 	const BCCMCameraState& cam_state,
 	const BCCMSourceExpectation& expectation,
-	Multinet::TerrainRenderSource* terrain_source
+	Multinet::TerrainRenderSource* terrain_source,
+	const multinet::rendering::chp::CurvedHorizonView* chp_view
 ) {}
 #endif
 

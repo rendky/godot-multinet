@@ -11,7 +11,9 @@ struct CurvedHorizonView {
 	ResolvedCurvedHorizonProfile profile{};
 	Multinet::SurfacePosition64 camera_surface{};
 	Multinet::FramePosition64 camera_in_frame{};
-	double camera_surface_height_m{ 0.0 };
+	double camera_surface_height_m{ 0.0 }; // Signed canonical camera altitude
+	double signed_camera_surface_altitude_m{ 0.0 }; // Explicit signed alias
+	double horizon_observer_height_m{ 0.0 }; // Nonnegative clamp for LOS/arc horizon
 	double horizon_line_of_sight_m{ 0.0 };
 	double horizon_surface_arc_m{ 0.0 };
 	double nominal_admitted_intrinsic_radius_m{ 0.0 };
@@ -24,6 +26,8 @@ struct CurvedHorizonView {
 		return manifest.is_valid() && camera_surface.is_valid() &&
 			std::isfinite(camera_in_frame.x) && std::isfinite(camera_in_frame.y) && std::isfinite(camera_in_frame.z) &&
 			std::isfinite(camera_surface_height_m) &&
+			std::isfinite(signed_camera_surface_altitude_m) &&
+			std::isfinite(horizon_observer_height_m) && horizon_observer_height_m >= 0.0 &&
 			std::isfinite(horizon_line_of_sight_m) && horizon_line_of_sight_m >= 0.0 &&
 			std::isfinite(horizon_surface_arc_m) && horizon_surface_arc_m >= 0.0 &&
 			std::isfinite(nominal_admitted_intrinsic_radius_m) && nominal_admitted_intrinsic_radius_m >= 0.0 &&

@@ -119,6 +119,15 @@ private:
 	bool source_dirty{ true };
 	bool manifest_built{ false };
 	bool freeze_update{ false };
+	uint64_t frozen_bccm_frame{ 0 };
+	uint64_t frozen_root_epoch{ 0 };
+	uint32_t frozen_chp_profile_version{ 0 };
+	godot::Vector3 previous_continuous_camera_m_{ 0.0f, 0.0f, 0.0f };
+	godot::Vector3 continuous_camera_m_{ 0.0f, 0.0f, 0.0f };
+	godot::Vector3 last_continuous_camera_delta_m_{ 0.0f, 0.0f, 0.0f };
+	godot::Vector3 frozen_continuous_camera_anchor_m_{ 0.0f, 0.0f, 0.0f };
+	uint64_t frozen_frustum_snapshot_id_{ 0 };
+	bool frozen_frustum_active_{ false };
 	godot::String domain_validation_message{ "OK" };
 	double runtime_ground_speed_m_s{ 0.0 };
 	double runtime_vertical_speed_m_s{ 0.0 };
@@ -254,6 +263,12 @@ public:
 	int get_chp_radius_policy() const;
 	void set_chp_explicit_radius_km(double p_km);
 	double get_chp_explicit_radius_km() const;
+	void set_chp_debug_reconstruction_mode(int p_mode);
+	int get_chp_debug_reconstruction_mode() const;
+	void set_chp_debug_negative_height_color(bool p_enabled);
+	bool get_chp_debug_negative_height_color() const;
+	void set_chp_debug_negative_height_exaggeration(bool p_enabled);
+	bool get_chp_debug_negative_height_exaggeration() const;
 
 	// Read-only derived world-domain diagnostics.
 	double get_canonical_area_km2() const;
@@ -272,7 +287,7 @@ public:
 	void set_camera_target(const godot::NodePath& p_path);
 	godot::NodePath get_camera_target() const;
 
-	void set_freeze_update(bool p_freeze) { freeze_update = p_freeze; }
+	void set_freeze_update(bool p_freeze);
 	bool get_freeze_update() const { return freeze_update; }
 
 	uint32_t get_candidate_count(int p_lod) const;

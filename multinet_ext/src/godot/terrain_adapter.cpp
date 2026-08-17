@@ -268,6 +268,17 @@ void MultinetBCCMNode3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_active_presentation_hash_text"), &MultinetBCCMNode3D::get_active_presentation_hash_text);
 	ClassDB::bind_method(D_METHOD("get_domain_validation_message"), &MultinetBCCMNode3D::get_domain_validation_message);
 	ClassDB::bind_method(D_METHOD("get_chp_status"), &MultinetBCCMNode3D::get_chp_status);
+	ClassDB::bind_method(D_METHOD("set_chp_debug_reconstruction_mode", "mode"), &MultinetBCCMNode3D::set_chp_debug_reconstruction_mode);
+	ClassDB::bind_method(D_METHOD("get_chp_debug_reconstruction_mode"), &MultinetBCCMNode3D::get_chp_debug_reconstruction_mode);
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "chp_debug_reconstruction_mode"), "set_chp_debug_reconstruction_mode", "get_chp_debug_reconstruction_mode");
+
+	ClassDB::bind_method(D_METHOD("set_chp_debug_negative_height_color", "enabled"), &MultinetBCCMNode3D::set_chp_debug_negative_height_color);
+	ClassDB::bind_method(D_METHOD("get_chp_debug_negative_height_color"), &MultinetBCCMNode3D::get_chp_debug_negative_height_color);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "chp_debug_negative_height_color"), "set_chp_debug_negative_height_color", "get_chp_debug_negative_height_color");
+
+	ClassDB::bind_method(D_METHOD("set_chp_debug_negative_height_exaggeration", "enabled"), &MultinetBCCMNode3D::set_chp_debug_negative_height_exaggeration);
+	ClassDB::bind_method(D_METHOD("get_chp_debug_negative_height_exaggeration"), &MultinetBCCMNode3D::get_chp_debug_negative_height_exaggeration);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "chp_debug_negative_height_exaggeration"), "set_chp_debug_negative_height_exaggeration", "get_chp_debug_negative_height_exaggeration");
 
 
 	ClassDB::bind_method(D_METHOD("set_freeze_update", "freeze"), &MultinetBCCMNode3D::set_freeze_update);
@@ -780,6 +791,8 @@ godot::Dictionary MultinetBCCMNode3D::advance_canonical_observer(
 		runtime_total_speed_m_s = 0.0;
 	}
 
+	refresh_chp_view();
+
 	result["valid"] = true;
 	result["face"] = static_cast<int>(next_position.face);
 	result["u_m"] = next_position.u_m;
@@ -1064,17 +1077,28 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 				current_cam_state.presentation_basis = godot::Basis();
 				current_cam_state.presentation_origin = editor_observer_state.presentation_origin_world;
 
+				const double cur_cont_x = static_cast<double>(editor_view_snapshot.world_position.x) + editor_presentation_rebase_offset_x_m;
+				const double cur_cont_y = static_cast<double>(editor_view_snapshot.world_position.y);
+				const double cur_cont_z = static_cast<double>(editor_view_snapshot.world_position.z) + editor_presentation_rebase_offset_z_m;
+				continuous_camera_m_ = godot::Vector3(static_cast<float>(cur_cont_x), static_cast<float>(cur_cont_y), static_cast<float>(cur_cont_z));
+
 				if (bccm_renderer.initialized() && render_source && current_cam_state.frame_epoch > 0) {
 					if (freeze_update) {
-						bccm_renderer.rebase_frozen_presentation(editor_view_snapshot.world_position);
+						const godot::Vector3 camera_delta = continuous_camera_m_ - previous_continuous_camera_m_;
+						last_continuous_camera_delta_m_ = camera_delta;
+						previous_continuous_camera_m_ = continuous_camera_m_;
+						bccm_renderer.update_frozen_view_presentation_delta(camera_delta, &current_chp_view);
 					} else {
+						previous_continuous_camera_m_ = continuous_camera_m_;
+						last_continuous_camera_delta_m_ = godot::Vector3(0.0f, 0.0f, 0.0f);
 						bccm_renderer.update_with_view(
 							editor_view_snapshot.world_position,
 							editor_view_snapshot.frustum,
 							manifest,
 							current_cam_state,
 							source_expectation,
-							render_source.get()
+							render_source.get(),
+							&current_chp_view
 						);
 					}
 				}
@@ -1120,9 +1144,20 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 				}
 
 				if (bccm_renderer.initialized() && render_source && current_cam_state.frame_epoch > 0) {
-					current_cam_state.has_presentation_binding = false;
-					if (!freeze_update) {
-						bccm_renderer.update(cam, manifest, current_cam_state, source_expectation, render_source.get());
+					current_cam_state.has_presentation_binding = current_cam_state.has_presentation_position;
+					current_cam_state.presentation_origin = godot::Vector3(0.0f, 0.0f, 0.0f);
+					current_cam_state.presentation_basis = godot::Basis();
+					const godot::Vector3 cur_pos = cam->get_global_position();
+					continuous_camera_m_ = cur_pos;
+					if (freeze_update) {
+						const godot::Vector3 camera_delta = continuous_camera_m_ - previous_continuous_camera_m_;
+						last_continuous_camera_delta_m_ = camera_delta;
+						previous_continuous_camera_m_ = continuous_camera_m_;
+						bccm_renderer.update_frozen_view_presentation_delta(camera_delta, &current_chp_view);
+					} else {
+						previous_continuous_camera_m_ = continuous_camera_m_;
+						last_continuous_camera_delta_m_ = godot::Vector3(0.0f, 0.0f, 0.0f);
+						bccm_renderer.update(cam, manifest, current_cam_state, source_expectation, render_source.get(), &current_chp_view);
 					}
 				}
 			}
@@ -1562,7 +1597,61 @@ godot::String MultinetBCCMNode3D::get_chp_status() const {
 		return "CPU CONTRACT INVALID / GPU INTEGRATION NOT STARTED";
 	}
 	if (!current_chp_view.is_valid()) return "CPU PROFILE READY / CAMERA VIEW NOT READY / GPU INTEGRATION NOT STARTED";
-	return "CPU VIEW READY / GPU INTEGRATION NOT STARTED";
+	if (world_presentation_input.chp_enabled && current_chp_view.chp_effective) {
+		if (bccm_renderer.get_chp_debug_reconstruction_mode() == 1) {
+			return "R1 GPU IDENTITY RECONSTRUCTION (Mode 1) / CULLING CONSERVATIVE";
+		}
+		return "R1 GPU POSITION ACTIVE (SphericalPolynomial6) / CULLING CONSERVATIVE";
+	}
+	return "CPU VIEW READY / GPU POSITION OFF";
+}
+
+void MultinetBCCMNode3D::set_chp_debug_reconstruction_mode(int p_mode) {
+	bccm_renderer.set_chp_debug_reconstruction_mode(p_mode);
+}
+
+int MultinetBCCMNode3D::get_chp_debug_reconstruction_mode() const {
+	return bccm_renderer.get_chp_debug_reconstruction_mode();
+}
+
+void MultinetBCCMNode3D::set_chp_debug_negative_height_color(bool p_enabled) {
+	bccm_renderer.set_chp_debug_negative_height_color(p_enabled);
+}
+
+bool MultinetBCCMNode3D::get_chp_debug_negative_height_color() const {
+	return bccm_renderer.get_chp_debug_negative_height_color();
+}
+
+void MultinetBCCMNode3D::set_chp_debug_negative_height_exaggeration(bool p_enabled) {
+	bccm_renderer.set_chp_debug_negative_height_exaggeration(p_enabled);
+}
+
+bool MultinetBCCMNode3D::get_chp_debug_negative_height_exaggeration() const {
+	return bccm_renderer.get_chp_debug_negative_height_exaggeration();
+}
+
+void MultinetBCCMNode3D::set_freeze_update(bool p_freeze) {
+	if (p_freeze && !freeze_update) {
+		frozen_bccm_frame = current_cam_state.frame_epoch;
+		frozen_root_epoch = current_cam_state.unfolding_root_frame.frame_epoch;
+		frozen_chp_profile_version = chp_profile.profile_version;
+
+#ifdef DEBUG_ENABLED
+		const double cur_cont_x = static_cast<double>(editor_view_snapshot.world_position.x) + editor_presentation_rebase_offset_x_m;
+		const double cur_cont_y = static_cast<double>(editor_view_snapshot.world_position.y);
+		const double cur_cont_z = static_cast<double>(editor_view_snapshot.world_position.z) + editor_presentation_rebase_offset_z_m;
+		continuous_camera_m_ = godot::Vector3(static_cast<float>(cur_cont_x), static_cast<float>(cur_cont_y), static_cast<float>(cur_cont_z));
+		previous_continuous_camera_m_ = continuous_camera_m_;
+		frozen_continuous_camera_anchor_m_ = continuous_camera_m_;
+		last_continuous_camera_delta_m_ = godot::Vector3(0.0f, 0.0f, 0.0f);
+#endif
+		frozen_frustum_snapshot_id_++;
+		frozen_frustum_active_ = true;
+	} else if (!p_freeze && freeze_update) {
+		frozen_frustum_active_ = false;
+		bccm_renderer.clear_frozen_frustum_visualization();
+	}
+	freeze_update = p_freeze;
 }
 
 void MultinetBCCMNode3D::set_camera_target(const godot::NodePath& p_path) { camera_target = p_path; }
@@ -1594,13 +1683,14 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["world_domain_topology_name"] = world_domain_input.topology == Multinet::WorldDomainTopology::FiniteRectangle
 		? "FiniteRectangle" : "ClosedSurfaceSixFace";
 	dict["coordinate_wrapping"] = get_coordinate_wrapping();
+	const bool is_chp_effective = world_presentation_input.chp_enabled && current_chp_view.chp_effective;
 	dict["chp_requested"] = world_presentation_input.chp_enabled;
-	dict["chp_effective"] = false; // WP6.1 publishes the CPU contract only; WP6.2 owns GPU geometry.
+	dict["chp_effective"] = is_chp_effective;
 	dict["chp_cpu_contract_valid"] = world_presentation_input.chp_enabled
 		? resolved_chp_profile.is_valid()
 		: world_presentation_manifest.is_valid();
 	dict["chp_cpu_view_valid"] = current_chp_view.is_valid();
-	dict["chp_gpu_effective"] = false;
+	dict["chp_gpu_effective"] = is_chp_effective;
 	dict["chp_implementation_state"] = get_chp_status();
 	dict["chp_radius_policy"] = static_cast<int>(world_presentation_manifest.chp_radius_policy);
 	dict["resolved_chp_radius_km"] = static_cast<double>(world_presentation_manifest.resolved_chp_radius_mm) / 1000000.0;
@@ -1644,6 +1734,51 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["sampling_chart_anchor_x_m"] = current_cam_state.unfolding_root_presentation_x_m;
 	dict["sampling_chart_anchor_z_m"] = current_cam_state.unfolding_root_presentation_z_m;
 	dict["sampling_chart_anchor_face"] = static_cast<int>(current_cam_state.unfolding_root_frame.origin.face);
+
+	const double root_u = current_cam_state.unfolding_root_frame.origin.u_m;
+	const double root_v = current_cam_state.unfolding_root_frame.origin.v_m;
+	const int root_face = static_cast<int>(current_cam_state.unfolding_root_frame.origin.face);
+	dict["canonical_root_face"] = root_face;
+	dict["canonical_root_u_m"] = root_u;
+	dict["canonical_root_v_m"] = root_v;
+
+	const double radius_m = world_domain_manifest.closed_surface.logical_area_radius_m;
+	const double half_ext_m = static_cast<double>(world_domain_manifest.closed_surface.chart_half_extent_mm) * 0.001;
+	const Multinet::FramePosition64 root_dir = half_ext_m > 0.0
+		? Multinet::ProjectionCOBE::map_forward(root_face, root_u / half_ext_m, root_v / half_ext_m)
+		: Multinet::FramePosition64{ 1.0, 0.0, 0.0 };
+	dict["logical_root_direction_x"] = root_dir.x;
+	dict["logical_root_direction_y"] = root_dir.y;
+	dict["logical_root_direction_z"] = root_dir.z;
+
+	dict["root_phys_pos_double_x"] = root_dir.x * radius_m;
+	dict["root_phys_pos_double_y"] = root_dir.y * radius_m;
+	dict["root_phys_pos_double_z"] = root_dir.z * radius_m;
+
+	const double root_dx = current_cam_state.presentation_x_m - current_cam_state.unfolding_root_presentation_x_m;
+	const double root_dz = current_cam_state.presentation_z_m - current_cam_state.unfolding_root_presentation_z_m;
+	dict["local_chart_distance_m"] = std::sqrt(root_dx * root_dx + root_dz * root_dz);
+	dict["presentation_rebase_count"] = static_cast<int64_t>(current_cam_state.unfolding_generation);
+	dict["presentation_local_camera_x_m"] = current_cam_state.presentation_x_m;
+	dict["presentation_local_camera_z_m"] = current_cam_state.presentation_z_m;
+
+	double freq_diag = recipe.legacy_signals.continental_frequency;
+	for (uint8_t oct = 0; oct < 4; ++oct) {
+		double sx = (root_dir.x * radius_m) * freq_diag;
+		double sy = (root_dir.y * radius_m) * freq_diag;
+		double sz = (root_dir.z * radius_m) * freq_diag;
+		double fx = std::floor(sx);
+		double fy = std::floor(sy);
+		double fz = std::floor(sz);
+		godot::String prefix = "root_lattice_oct_" + godot::String::num_int64(oct);
+		dict[prefix + "_cell_x"] = static_cast<int64_t>(fx);
+		dict[prefix + "_cell_y"] = static_cast<int64_t>(fy);
+		dict[prefix + "_cell_z"] = static_cast<int64_t>(fz);
+		dict[prefix + "_frac_x"] = sx - fx;
+		dict[prefix + "_frac_y"] = sy - fy;
+		dict[prefix + "_frac_z"] = sz - fz;
+		freq_diag *= static_cast<double>(recipe.legacy_signals.lacunarity);
+	}
 	dict["runtime_ground_speed_m_s"] = runtime_ground_speed_m_s;
 	dict["runtime_vertical_speed_m_s"] = runtime_vertical_speed_m_s;
 	dict["runtime_total_speed_m_s"] = runtime_total_speed_m_s;
@@ -1901,6 +2036,35 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["non-fallback destination-face page count"] = face_non_fallback_count[expected_dest_face];
 	dict["fallback_slot_valid_count"] = fallback_slot_valid_count;
 	dict["maximum submitted texture layer"] = max_layer;
+
+	dict["freeze_update"] = freeze_update;
+	dict["frozen_bccm_frame"] = static_cast<int64_t>(frozen_bccm_frame);
+	dict["frozen_root_epoch"] = static_cast<int64_t>(frozen_root_epoch);
+	dict["frozen_chp_profile_version"] = frozen_chp_profile_version;
+	dict["frozen_frustum_snapshot_id"] = static_cast<int64_t>(frozen_frustum_snapshot_id_);
+	dict["frozen_frustum_active"] = frozen_frustum_active_;
+
+#ifdef DEBUG_ENABLED
+	dict["editor_local_camera_x_m"] = static_cast<double>(editor_view_snapshot.world_position.x);
+	dict["editor_local_camera_y_m"] = static_cast<double>(editor_view_snapshot.world_position.y);
+	dict["editor_local_camera_z_m"] = static_cast<double>(editor_view_snapshot.world_position.z);
+	dict["editor_presentation_rebase_offset_x_m"] = editor_presentation_rebase_offset_x_m;
+	dict["editor_presentation_rebase_offset_z_m"] = editor_presentation_rebase_offset_z_m;
+	dict["continuous_camera_x_m"] = static_cast<double>(continuous_camera_m_.x);
+	dict["continuous_camera_y_m"] = static_cast<double>(continuous_camera_m_.y);
+	dict["continuous_camera_z_m"] = static_cast<double>(continuous_camera_m_.z);
+	dict["per_frame_camera_delta_x_m"] = static_cast<double>(last_continuous_camera_delta_m_.x);
+	dict["per_frame_camera_delta_y_m"] = static_cast<double>(last_continuous_camera_delta_m_.y);
+	dict["per_frame_camera_delta_z_m"] = static_cast<double>(last_continuous_camera_delta_m_.z);
+	dict["editor_presentation_rebase_count"] = editor_presentation_rebase_count;
+	dict["editor_last_presentation_rebase_x_m"] = editor_last_presentation_rebase_x_m;
+	dict["editor_last_presentation_rebase_z_m"] = editor_last_presentation_rebase_z_m;
+#endif
+
+	dict["live_camera_x_m"] = current_cam_state.presentation_x_m;
+	dict["live_camera_y_m"] = current_cam_state.canonical_position.altitude_m;
+	dict["live_camera_z_m"] = current_cam_state.presentation_z_m;
+	dict["live_chp_camera_altitude_m"] = current_chp_view.camera_surface_height_m;
 
 	return dict;
 }
@@ -2233,6 +2397,18 @@ void MultinetBCCMNode3D::publish_editor_view_camera(godot::Camera3D* p_editor_ca
 			editor_observer_state.unfolding_root_presentation_z_m -= static_cast<double>(shift.z);
 			editor_view_snapshot.frustum = multinet::rendering::FrustumPlanes::extract_from_camera(p_editor_camera);
 			editor_view_snapshot.valid = editor_view_snapshot.frustum.valid;
+		}
+
+		if (freeze_update && frozen_frustum_active_ && !bccm_renderer.has_frozen_frustum_visualization() && bccm_renderer.initialized()) {
+			const float fov = p_editor_camera->get_fov();
+			const float near_m = p_editor_camera->get_near();
+			const float far_m = p_editor_camera->get_far();
+			float aspect = 16.0f / 9.0f;
+			if (get_viewport()) {
+				const godot::Vector2 size = get_viewport()->get_visible_rect().size;
+				if (size.y > 0.0f) aspect = size.x / size.y;
+			}
+			bccm_renderer.set_frozen_frustum_visualization(p_editor_camera->get_global_transform(), fov, near_m, far_m, aspect);
 		}
 	}
 }
