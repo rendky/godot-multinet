@@ -254,6 +254,87 @@ struct RollingLatencyTracker {
 	}
 };
 
+struct LODCutDiagnostics {
+	int64_t prev_center_bx{ 0 };
+	int64_t prev_center_bv{ 0 };
+	int64_t current_center_bx{ 0 };
+	int64_t current_center_bv{ 0 };
+
+	int64_t delta_center_bx{ 0 };
+	int64_t delta_center_bv{ 0 };
+
+	double delta_center_u_m{ 0.0 };
+	double delta_center_v_m{ 0.0 };
+
+	double snap_period_m{ 0.0 };
+	uint32_t snap_steps_crossed_u{ 0 };
+	uint32_t snap_steps_crossed_v{ 0 };
+	uint32_t max_snap_steps_crossed{ 0 };
+	bool skipped_snap_event{ false };
+
+	// Inner-hole ownership diagnostics for LOD1..7
+	int32_t prev_hole_dx{ 0 };
+	int32_t prev_hole_dz{ 0 };
+	int32_t current_hole_dx{ 0 };
+	int32_t current_hole_dz{ 0 };
+	int32_t hole_delta_dx{ 0 };
+	int32_t hole_delta_dz{ 0 };
+	bool hole_movement_event{ false };
+	uint32_t hole_steps_crossed{ 0 };
+
+	uint32_t candidate_count_before{ 0 };
+	uint32_t candidate_count_after{ 0 };
+	uint32_t candidates_retained{ 0 };
+	uint32_t candidates_added{ 0 };
+	uint32_t candidates_removed{ 0 };
+	float turnover_fraction{ 0.0f };
+
+	uint32_t submitted_instance_count{ 0 };
+	bool instance_buffer_changed{ false };
+	size_t instance_bytes_uploaded{ 0 };
+};
+
+struct FrameCutDiagnostics {
+	uint64_t render_update_serial{ 0 };
+
+	double presentation_observer_x_m{ 0.0 };
+	double presentation_observer_z_m{ 0.0 };
+	uint8_t canonical_face{ 0 };
+	double canonical_u_m{ 0.0 };
+	double canonical_v_m{ 0.0 };
+
+	double camera_delta_x_m{ 0.0 };
+	double camera_delta_z_m{ 0.0 };
+	double ground_plane_distance_moved_m{ 0.0 };
+	double delta_seconds{ 0.0 };
+	double estimated_speed_m_s{ 0.0 };
+	double estimated_speed_km_s{ 0.0 };
+
+	uint8_t active_lod_count{ 0 };
+	uint32_t total_instances_submitted{ 0 };
+	uint32_t bccm_streams_submitted{ 0 };
+	uint32_t multimesh_buffers_rewritten{ 0 };
+	size_t total_instance_bytes_uploaded{ 0 };
+
+	bool presentation_rebase_occurred{ false };
+	double rebase_shift_x_m{ 0.0 };
+	double rebase_shift_z_m{ 0.0 };
+	uint64_t rebase_count{ 0 };
+
+	bool freeze_update_active{ false };
+	bool chp_effective{ false };
+	float chp_signed_altitude_m{ 0.0f };
+
+	uint32_t frame_skipped_snap_events{ 0 };
+	uint32_t frame_largest_snap_steps{ 0 };
+	uint8_t worst_lod{ 0 };
+	uint8_t worst_axis{ 0 }; // 0: none, 1: U, 2: V, 3: both
+	float worst_candidate_turnover{ 0.0f };
+
+	std::array<LODCutDiagnostics, BlockClipmapProfile::MAX_LEVELS> lods{};
+};
+
+
 enum class ResolutionClass : uint8_t {
 	Analytic,
 	ExactResident,
@@ -468,6 +549,7 @@ private:
 	int chp_debug_reconstruction_mode{ 2 };
 	bool chp_debug_negative_height_color{ false };
 	bool chp_debug_negative_height_exaggeration{ false };
+	int bccm_debug_visual_mode{ 0 };
 	Multinet::TerrainFallbackBounds fallback_bounds{};
 	Multinet::WorldDomainManifest active_domain{};
 
@@ -542,6 +624,10 @@ private:
 		uint32_t last_visible_count{ 0 };
 		uint32_t submitted_visible_count{ 0 };
 		uint8_t submitted_buffer_index{ 0 };
+
+		int32_t last_hole_dx{ 0 };
+		int32_t last_hole_dz{ 0 };
+		bool has_last_hole{ false };
 
 		std::array<TerrainRenderBlockKey, BlockClipmapProfile::MAX_CANDIDATES> diagnostic_candidate_keys{};
 		std::array<VisibleInstanceDiagnostic, BlockClipmapProfile::MAX_CANDIDATES> pending_visible_diagnostics{};
@@ -624,10 +710,31 @@ private:
 	Multinet::WorldScaleManifest cached_scale_{};
 	bool last_bound_chp_gpu_effective_{ false };
 	float last_bound_chp_camera_altitude_m_{ 0.0f };
+
+#ifndef MULTINET_TEST
+
 	godot::RID frozen_frustum_mesh_rid_{};
 	godot::RID frozen_frustum_instance_rid_{};
 	godot::Transform3D frozen_frustum_transform_{};
+#endif
 	bool has_frozen_frustum_{ false };
+
+
+	// Per-frame cut and snap tracking
+	uint64_t cut_render_update_serial_{ 0 };
+	double last_cut_cam_u_{ 0.0 };
+	double last_cut_cam_v_{ 0.0 };
+	bool has_last_cut_cam_pos_{ false };
+
+	std::array<int64_t, BlockClipmapProfile::MAX_LEVELS> last_cut_center_bx_{};
+	std::array<int64_t, BlockClipmapProfile::MAX_LEVELS> last_cut_center_bv_{};
+	std::array<bool, BlockClipmapProfile::MAX_LEVELS> has_last_cut_center_{};
+
+	bool high_speed_cut_diagnostics_enabled_{ false };
+	FrameCutDiagnostics last_cut_diagnostics_{};
+	uint64_t total_skipped_snap_events_{ 0 };
+	uint64_t total_multimesh_buffer_rewrites_{ 0 };
+	size_t cumulative_instance_bytes_uploaded_{ 0 };
 
 	godot::RID create_master_block_mesh(bool p_diamond_triangulation);
 
@@ -692,7 +799,8 @@ public:
 		const BCCMCameraState& cam_state,
 		const BCCMSourceExpectation& expectation,
 		Multinet::TerrainRenderSource* terrain_source = nullptr,
-		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr
+		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr,
+		double delta_seconds = 0.0
 	);
 
 	void update_with_view(
@@ -702,7 +810,8 @@ public:
 		const BCCMCameraState& cam_state,
 		const BCCMSourceExpectation& expectation,
 		Multinet::TerrainRenderSource* terrain_source = nullptr,
-		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr
+		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr,
+		double delta_seconds = 0.0
 	);
 
 	// Freeze keeps the submitted set and page state fixed, but camera
@@ -710,13 +819,19 @@ public:
 	// so the live camera moves freely around the frozen cut in world space.
 	void update_frozen_view_presentation_delta(
 		const godot::Vector3& p_camera_delta,
-		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr
+		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr,
+		double delta_seconds = 0.0
 	) noexcept;
 
 	void update_frozen_view_presentation(
 		const godot::Vector3& p_camera_world_position,
 		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr
 	) noexcept;
+
+	// Freeze-only Phase-B2 morph compensation. The submitted instance transforms
+	// continue moving camera-relative, while this offset keeps morph-distance
+	// evaluation anchored to the observer position at which the cut was frozen.
+	void set_parent_morph_view_offset(const godot::Vector2& p_offset_m) noexcept;
 
 	void rebase_frozen_presentation(const godot::Vector3& p_camera_world_position) noexcept {
 		update_frozen_view_presentation(p_camera_world_position, nullptr);
@@ -739,7 +854,8 @@ public:
 		const BCCMCameraState& cam_state,
 		const BCCMSourceExpectation& expectation,
 		Multinet::TerrainRenderSource* terrain_source = nullptr,
-		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr
+		const multinet::rendering::chp::CurvedHorizonView* chp_view = nullptr,
+		double delta_seconds = 0.0
 	);
 
 	const BlockClipmapProfile& get_profile() const noexcept { return profile; }
@@ -787,6 +903,22 @@ public:
 	bool get_chp_debug_negative_height_exaggeration() const noexcept { return chp_debug_negative_height_exaggeration; }
 	void set_chp_debug_negative_height_exaggeration(bool enabled) noexcept { chp_debug_negative_height_exaggeration = enabled; }
 
+	int get_bccm_debug_visual_mode() const noexcept { return bccm_debug_visual_mode; }
+	void set_bccm_debug_visual_mode(int mode) noexcept;
+
+	bool get_high_speed_cut_diagnostics_enabled() const noexcept { return high_speed_cut_diagnostics_enabled_; }
+	void set_high_speed_cut_diagnostics_enabled(bool enabled) noexcept {
+		if (high_speed_cut_diagnostics_enabled_ != enabled) {
+			high_speed_cut_diagnostics_enabled_ = enabled;
+			if (enabled) {
+				for (auto& lvl : levels) {
+					lvl.last_candidate_count = 0;
+				}
+			}
+		}
+	}
+
+
 	const FrameTerrainSubmissionPlan& get_last_submission_plan() const { return last_submission_plan; }
 	const StreamingDiagnosticsSnapshot& get_last_streaming_diagnostics() const { return last_streaming_diagnostics; }
 
@@ -799,6 +931,11 @@ public:
 	// and expected snapshot identity — without creating Godot RIDs.
 	void get_diagnostic_snapshot(RendererDiagnosticSnapshot& out_snap) const;
 	DetailedRendererDiagnostics get_detailed_diagnostics() const;
+	[[nodiscard]] const FrameCutDiagnostics& get_cut_diagnostics() const noexcept { return last_cut_diagnostics_; }
+	[[nodiscard]] uint64_t get_total_skipped_snap_events() const noexcept { return total_skipped_snap_events_; }
+	[[nodiscard]] uint64_t get_total_multimesh_buffer_rewrites() const noexcept { return total_multimesh_buffer_rewrites_; }
+	[[nodiscard]] size_t get_cumulative_instance_bytes_uploaded() const noexcept { return cumulative_instance_bytes_uploaded_; }
+
 
 	void bind_material_uniforms(
 		const Multinet::TerrainRecipe& recipe,

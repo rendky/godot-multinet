@@ -119,7 +119,9 @@ private:
 	bool source_dirty{ true };
 	bool manifest_built{ false };
 	bool freeze_update{ false };
+	bool high_speed_cut_diagnostics_enabled{ false };
 	uint64_t frozen_bccm_frame{ 0 };
+
 	uint64_t frozen_root_epoch{ 0 };
 	uint32_t frozen_chp_profile_version{ 0 };
 	godot::Vector3 previous_continuous_camera_m_{ 0.0f, 0.0f, 0.0f };
@@ -269,6 +271,8 @@ public:
 	bool get_chp_debug_negative_height_color() const;
 	void set_chp_debug_negative_height_exaggeration(bool p_enabled);
 	bool get_chp_debug_negative_height_exaggeration() const;
+	void set_bccm_debug_visual_mode(int p_mode);
+	int get_bccm_debug_visual_mode() const;
 
 	// Read-only derived world-domain diagnostics.
 	double get_canonical_area_km2() const;
@@ -290,9 +294,14 @@ public:
 	void set_freeze_update(bool p_freeze);
 	bool get_freeze_update() const { return freeze_update; }
 
+	void set_high_speed_cut_diagnostics_enabled(bool p_enabled);
+	bool get_high_speed_cut_diagnostics_enabled() const;
+
+
 	uint32_t get_candidate_count(int p_lod) const;
 	uint32_t get_visible_count(int p_lod) const;
 	uint32_t get_submitted_streams() const;
+
 
 #ifdef DEBUG_ENABLED
 	// C++ debug publisher for smoke testing (computes valid SurfacePosition64 and SurfaceFrame)

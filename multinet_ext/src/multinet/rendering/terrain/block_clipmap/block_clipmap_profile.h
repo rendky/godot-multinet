@@ -2,6 +2,7 @@
 #define MULTINET_BLOCK_CLIPMAP_PROFILE_H
 
 #include <cstdint>
+#include <cmath>
 
 namespace multinet::rendering {
 
@@ -41,6 +42,42 @@ struct BlockClipmapProfile {
 		return lod0_block_size * static_cast<float>(1 << lod);
 	}
 };
+
+struct QuantizedLODCenter {
+	int64_t center_bx{ 0 };
+	int64_t center_bv{ 0 };
+	double center_u_m{ 0.0 };
+	double center_v_m{ 0.0 };
+	double block_size_m{ 0.0 };
+	double snap_size_m{ 0.0 };
+};
+
+inline QuantizedLODCenter compute_lod_center(
+	double observer_u_m,
+	double observer_v_m,
+	uint8_t lod,
+	const BlockClipmapProfile& profile
+) noexcept {
+	const double block_size = profile.get_lod_block_size(lod);
+	const double snap_size = (lod + 1 < profile.level_count)
+		? profile.get_lod_block_size(lod + 1)
+		: block_size;
+
+	const double snap_u = std::floor(observer_u_m / snap_size) * snap_size;
+	const double snap_v = std::floor(observer_v_m / snap_size) * snap_size;
+
+	const int64_t center_bx = static_cast<int64_t>(std::floor(snap_u / block_size));
+	const int64_t center_bv = static_cast<int64_t>(std::floor(snap_v / block_size));
+
+	return QuantizedLODCenter{
+		center_bx,
+		center_bv,
+		static_cast<double>(center_bx) * block_size,
+		static_cast<double>(center_bv) * block_size,
+		block_size,
+		snap_size
+	};
+}
 
 struct BlockClipmapLimits {
 	size_t max_source_requests{ 64 };

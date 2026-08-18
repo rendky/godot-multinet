@@ -11,7 +11,8 @@
 namespace multinet::rendering {
 
 static std::string build_full_shader_code() {
-	std::string code = R"(shader_type spatial;
+	std::string code;
+	code += R"(shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_burley, specular_schlick_ggx;
 
 uniform sampler2DArray height_pages : hint_default_black, filter_nearest;
@@ -28,6 +29,13 @@ uniform float chart_half_extent_m = 10000000.0;
 uniform float logical_area_radius_m = 6371000.0;
 uniform float lod_spacing = 2.0;
 uniform float lod_block_size = 32.0;
+uniform bool parent_morph_enabled = false;
+// During Freeze Update, instance translations remain live/camera-relative so the
+// frozen cut stays fixed in world space. Compensate the morph distance back to
+// the frozen observer anchor so the transition band itself is frozen with the cut.
+uniform vec2 parent_morph_view_offset_m = vec2(0.0);
+uniform uint current_lod_index = 0u;
+uniform uint active_ordinary_level_count = 8u;
 uniform uint world_domain_topology = 1u;
 uniform float finite_half_extent_x_m = 2500000.0;
 uniform float finite_half_extent_z_m = 2500000.0;
@@ -65,6 +73,7 @@ uniform float chp_certified_max_distance_m = 0.0;
 uniform float chp_certified_max_u = 0.0;
 uniform bool chp_debug_negative_height_color = false;
 uniform bool chp_debug_negative_height_exaggeration = false;
+uniform int bccm_debug_visual_mode = 0; // 0 = default albedo, 1 = normal rgb, 2 = morph mu, 3 = recursion depth
 
 // Canonical Root-Relative Noise Lattice Anchors (R1.2P Precision)
 uniform ivec3 terrain_root_cell_0 = ivec3(0);
@@ -89,6 +98,8 @@ varying vec2 canonical_domain_uv_m;
 varying float terrain_face;
 varying vec3 terrain_direction;
 varying float debug_final_y_m;
+varying float debug_morph_mu;
+varying float debug_recursion_depth;
 
 // Canonical Bit-Noise Hash (Rule 4: SquirrelNoise5 v1)
 uint squirrel_noise5_u2_v1(uint x_bits, uint y_bits, uint seed) {
@@ -413,7 +424,8 @@ vec4 eval_closed_analytic_height_gradient_lattice(vec3 delta_phys) {
 		max_elevation * ((norm01 - 0.5) * 2.0),
 		normalized_gradient * (2.0 * max_elevation));
 }
-
+)";
+	code += R"(
 float eval_closed_analytic_height_direction(vec3 dir) {
 	vec3 phys_pos = dir * logical_area_radius_m;
 
@@ -760,6 +772,95 @@ vec3 eval_chp_curved_surface_position(vec2 q, float height_m) {
 	return base_pos + height_m * axis;
 }
 
+vec3 eval_chp_curved_surface_normal(vec2 q, float height_m, float h_u, float h_v) {
+	float d2 = dot(q, q);
+	if (chp_function_class == 0u) {
+		vec3 tangent_x = vec3(1.0, h_u - q.x * chp_inverse_radius, 0.0);
+		vec3 tangent_z = vec3(0.0, h_v - q.y * chp_inverse_radius, 1.0);
+		vec3 n = cross(tangent_z, tangent_x);
+		float len = length(n);
+		return len > 1.0e-15 ? n / len : vec3(0.0, 1.0, 0.0);
+	}
+	float u = d2 * chp_inverse_radius_squared;
+	float a = 1.0;
+	float b = 0.0;
+	float c = 1.0;
+	float da_du = 0.0;
+	float db_du = 0.0;
+	float dc_du = 0.0;
+	float u2 = u * u;
+	if (chp_function_class == 1u) {
+		a = 1.0 - u / 6.0 + u2 / 120.0;
+		b = u / 2.0 - u2 / 24.0;
+		c = 1.0 - u / 2.0 + u2 / 24.0;
+		da_du = -1.0 / 6.0 + u / 60.0;
+		db_du = 1.0 / 2.0 - u / 12.0;
+		dc_du = -1.0 / 2.0 + u / 12.0;
+	} else {
+		float u3 = u2 * u;
+		a = 1.0 - u / 6.0 + u2 / 120.0 - u3 / 5040.0;
+		b = u / 2.0 - u2 / 24.0 + u3 / 720.0;
+		c = 1.0 - u / 2.0 + u2 / 24.0 - u3 / 720.0;
+		da_du = -1.0 / 6.0 + u / 60.0 - u2 / 1680.0;
+		db_du = 1.0 / 2.0 - u / 12.0 + u2 / 240.0;
+		dc_du = -1.0 / 2.0 + u / 12.0 - u2 / 240.0;
+	}
+	float ux = 2.0 * q.x * chp_inverse_radius_squared;
+	float uz = 2.0 * q.y * chp_inverse_radius_squared;
+	float a_x = a + q.x * da_du * ux;
+	float a_z = a + q.y * da_du * uz;
+	float p0_y_x = -chp_radius_m * db_du * ux;
+	float p0_y_z = -chp_radius_m * db_du * uz;
+
+	vec3 dbase_dx = vec3(a_x, p0_y_x, q.y * da_du * ux);
+	vec3 dbase_dz = vec3(q.x * da_du * uz, p0_y_z, a_z);
+
+	vec3 raw_axis = vec3(a * q.x * chp_inverse_radius, c, a * q.y * chp_inverse_radius);
+	float raw_len = length(raw_axis);
+	vec3 axis = raw_len > 1.0e-15 ? raw_axis / raw_len : vec3(0.0, 1.0, 0.0);
+
+	vec3 draw_dx = vec3(a_x * chp_inverse_radius, dc_du * ux, q.y * da_du * ux * chp_inverse_radius);
+	vec3 draw_dz = vec3(q.x * da_du * uz * chp_inverse_radius, dc_du * uz, a_z * chp_inverse_radius);
+
+	vec3 daxis_dx = (raw_len > 1.0e-15) ? (draw_dx - axis * dot(axis, draw_dx)) / raw_len : vec3(0.0);
+	vec3 daxis_dz = (raw_len > 1.0e-15) ? (draw_dz - axis * dot(axis, draw_dz)) / raw_len : vec3(0.0);
+
+	vec3 tangent_x = dbase_dx + axis * h_u + daxis_dx * height_m;
+	vec3 tangent_z = dbase_dz + axis * h_v + daxis_dz * height_m;
+
+	vec3 raw_n = cross(tangent_z, tangent_x);
+	float n_len = length(raw_n);
+	return n_len > 1.0e-15 ? raw_n / n_len : vec3(0.0, 1.0, 0.0);
+}
+)";
+	code += R"(
+float sample_bilinear_page(sampler2DArray pages, vec2 local_coord, uint layer) {
+	vec2 clamped_local = clamp(local_coord, 0.0, 16.0);
+	vec2 page_uv = clamped_local + 1.0;
+	ivec2 base = ivec2(floor(page_uv));
+	vec2 frac = page_uv - vec2(base);
+	float h00 = texelFetch(pages, ivec3(base.x, base.y, int(layer)), 0).r;
+	float h10 = texelFetch(pages, ivec3(base.x + 1, base.y, int(layer)), 0).r;
+	float h01 = texelFetch(pages, ivec3(base.x, base.y + 1, int(layer)), 0).r;
+	float h11 = texelFetch(pages, ivec3(base.x + 1, base.y + 1, int(layer)), 0).r;
+	return mix(mix(h00, h10, frac.x), mix(h01, h11, frac.x), frac.y);
+}
+
+vec3 sample_bilinear_page_with_derivatives(sampler2DArray pages, vec2 local_coord, uint layer, float spacing) {
+	vec2 clamped_local = clamp(local_coord, 0.0, 16.0);
+	vec2 page_uv = clamped_local + 1.0;
+	ivec2 base = ivec2(floor(page_uv));
+	vec2 frac = page_uv - vec2(base);
+	float h00 = texelFetch(pages, ivec3(base.x, base.y, int(layer)), 0).r;
+	float h10 = texelFetch(pages, ivec3(base.x + 1, base.y, int(layer)), 0).r;
+	float h01 = texelFetch(pages, ivec3(base.x, base.y + 1, int(layer)), 0).r;
+	float h11 = texelFetch(pages, ivec3(base.x + 1, base.y + 1, int(layer)), 0).r;
+	float val = mix(mix(h00, h10, frac.x), mix(h01, h11, frac.x), frac.y);
+	float du = mix(h10 - h00, h11 - h01, frac.y) / spacing;
+	float dv = mix(h01 - h00, h11 - h10, frac.x) / spacing;
+	return vec3(val, du, dv);
+}
+
 void vertex() {
 	// Decode Dedicated Instance Attributes Contract (Step 2)
 	uint r_bits = uint(round(INSTANCE_CUSTOM.r));
@@ -790,14 +891,78 @@ void vertex() {
 	bool on_x_edge = ((edge_mask & 1u) != 0u && fine_i.x == 16) || ((edge_mask & 2u) != 0u && fine_i.x == 0);
 	bool on_z_edge = ((edge_mask & 4u) != 0u && fine_i.y == 16) || ((edge_mask & 8u) != 0u && fine_i.y == 0);
 
-	if (on_x_edge && is_odd_z) {
-		vz = float(fine_i.y & ~1);
-	}
-	if (on_z_edge && is_odd_x) {
-		vx = float(fine_i.x & ~1);
+	float active_morph_mu = 0.0;
+	float active_recursion_depth_val = 0.0;
+
+	if (parent_morph_enabled && current_lod_index + 1u < active_ordinary_level_count) {
+		// Stage points from local integer lattice bit masks.
+		// Godot shader bitwise operators are scalar-only for signed integer operands,
+		// so mask each ivec2 component explicitly. fine_i is the local 0..16
+		// master-grid identity, preserving the exact B1 parent phase.
+		ivec2 p1_i = ivec2(fine_i.x & ~1, fine_i.y & ~1);
+		ivec2 p2_i = ivec2(fine_i.x & ~3, fine_i.y & ~3);
+		ivec2 p3_i = ivec2(fine_i.x & ~7, fine_i.y & ~7);
+		vec2 p0 = vec2(fine_i);
+		vec2 p1 = vec2(p1_i);
+		vec2 p2 = vec2(p2_i);
+		vec2 p3 = vec2(p3_i);
+
+		float B0 = 16.0 * lod_spacing;
+		float B1 = 2.0 * B0;
+		float B2 = 4.0 * B0;
+
+		// Stage Chebyshev distances in active camera-relative flat frame
+		vec2 q0 = (MODEL_MATRIX * vec4(p0.x, 0.0, p0.y, 1.0)).xz + parent_morph_view_offset_m;
+		float d0 = max(abs(q0.x), abs(q0.y));
+		float mu0 = clamp((d0 - 1.25 * B0) / (0.75 * B0), 0.0, 1.0);
+
+		vec2 q1 = (MODEL_MATRIX * vec4(p1.x, 0.0, p1.y, 1.0)).xz + parent_morph_view_offset_m;
+		float d1 = max(abs(q1.x), abs(q1.y));
+		float mu1 = (current_lod_index + 2u < active_ordinary_level_count)
+			? clamp((d1 - 1.25 * B1) / (0.75 * B1), 0.0, 1.0)
+			: 0.0;
+
+		vec2 q2 = (MODEL_MATRIX * vec4(p2.x, 0.0, p2.y, 1.0)).xz + parent_morph_view_offset_m;
+		float d2 = max(abs(q2.x), abs(q2.y));
+		float mu2 = (current_lod_index + 3u < active_ordinary_level_count)
+			? clamp((d2 - 1.25 * B2) / (0.75 * B2), 0.0, 1.0)
+			: 0.0;
+
+		active_morph_mu = mu0;
+		active_recursion_depth_val = (mu0 > 0.0) ? (1.0 + ((mu1 > 0.0) ? 1.0 : 0.0) + ((mu2 > 0.0) ? 1.0 : 0.0)) : 0.0;
+
+		// Coarse to fine live parent composition
+		vec2 live3 = p3;
+		vec2 live2 = (current_lod_index + 3u < active_ordinary_level_count) ? mix(p2, live3, mu2) : p2;
+		vec2 live1 = (current_lod_index + 2u < active_ordinary_level_count) ? mix(p1, live2, mu1) : p1;
+		vec2 live0 = mix(p0, live1, mu0);
+
+		vec2 morphed_local = live0;
+
+		// Hard outer-edge crack collapse: exact live parent endpoint
+		if (on_x_edge && is_odd_z) {
+			morphed_local.y = live1.y;
+		}
+		if (on_z_edge && is_odd_x) {
+			morphed_local.x = live1.x;
+		}
+
+		vx = morphed_local.x;
+		vz = morphed_local.y;
+	} else {
+		// Fallback / uncertified profile: pre-B1 one-level hard edge collapse
+		if (on_x_edge && is_odd_z) {
+			vz = float(fine_i.y & ~1);
+		}
+		if (on_z_edge && is_odd_x) {
+			vx = float(fine_i.x & ~1);
+		}
 	}
 	VERTEX.x = vx;
 	VERTEX.z = vz;
+
+	debug_morph_mu = active_morph_mu;
+	debug_recursion_depth = active_recursion_depth_val;
 
 	// Patch anchors are stored at the 8,8 centre vertex. Legacy finite and test
 	// instances retain block-index coordinates.
@@ -821,6 +986,7 @@ void vertex() {
 		VERTEX.z += (clipped_uv_m.y - v_m) / lod_spacing;
 		u_m = clipped_uv_m.x;
 		v_m = clipped_uv_m.y;
+		plane_m = vec2(VERTEX.x * lod_spacing, VERTEX.z * lod_spacing);
 	}
 	canonical_domain_uv_m = vec2(u_m, v_m);
 	uint color_face = (r_bits >> 13u) & 7u;
@@ -877,29 +1043,6 @@ void vertex() {
 			face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding,
 			uses_logical_chart, uses_bounded_logical_chart, plane_m);
 
-	float final_y = h_center;
-	if (source_mode == 1u) {
-		// AbsoluteHeightPageDebug mode: compare with resident height page
-		if (gpu_layer > 0u) {
-			ivec2 page_texel = ivec2(int(round(vx)) + 1, int(round(vz)) + 1);
-			final_y = texelFetch(height_pages, ivec3(page_texel.x, page_texel.y, int(gpu_layer)), 0).r;
-		} else {
-			final_y = h_center;
-		}
-	} else if (source_mode == 2u) {
-		// HybridAdditiveDelta mode: analytic base + additive delta page (or 0 if layer 0)
-		float delta_y = 0.0;
-		if (gpu_layer > 0u) {
-			ivec2 page_texel = ivec2(int(round(vx)) + 1, int(round(vz)) + 1);
-			delta_y = texelFetch(height_pages, ivec3(page_texel.x, page_texel.y, int(gpu_layer)), 0).r;
-		}
-		final_y = h_center + delta_y;
-	} else {
-		// AnalyticBase mode (Production): immediate canonical analytic height
-		final_y = h_center;
-	}
-	VERTEX.y = final_y;
-
 	// The logical closed chart has an exact derivative. Its former half-metre
 	// direction probes fall below FP32 angular precision at Earth radius.
 	float h_rt = h_center;
@@ -935,44 +1078,50 @@ void vertex() {
 			: (h_dn - h_up) / (2.0 * analytic_normal_sample_step_m);
 	}
 
+	float final_y = h_center;
+	float final_slope_u = analytic_slope_u;
+	float final_slope_v = analytic_slope_v;
+
 	if (source_mode == 1u) {
+		// AbsoluteHeightPageDebug mode: single-fetch bilinear height and analytic derivatives
 		if (gpu_layer > 0u) {
-			ivec2 page_texel = ivec2(int(round(vx)) + 1, int(round(vz)) + 1);
-			h_rt = texelFetch(height_pages, ivec3(page_texel.x + 1, page_texel.y, int(gpu_layer)), 0).r;
-			h_lf = texelFetch(height_pages, ivec3(page_texel.x - 1, page_texel.y, int(gpu_layer)), 0).r;
-			h_dn = texelFetch(height_pages, ivec3(page_texel.x, page_texel.y + 1, int(gpu_layer)), 0).r;
-			h_up = texelFetch(height_pages, ivec3(page_texel.x, page_texel.y - 1, int(gpu_layer)), 0).r;
+			vec3 page_sample = sample_bilinear_page_with_derivatives(height_pages, vec2(vx, vz), gpu_layer, lod_spacing);
+			final_y = page_sample.x;
+			final_slope_u = page_sample.y;
+			final_slope_v = page_sample.z;
+		} else {
+			final_y = h_center;
 		}
-	} else if (source_mode == 2u && gpu_layer > 0u) {
-		ivec2 page_texel = ivec2(int(round(vx)) + 1, int(round(vz)) + 1);
-		float delta_rt = texelFetch(height_pages, ivec3(page_texel.x + 1, page_texel.y, int(gpu_layer)), 0).r;
-		float delta_lf = texelFetch(height_pages, ivec3(page_texel.x - 1, page_texel.y, int(gpu_layer)), 0).r;
-		float delta_dn = texelFetch(height_pages, ivec3(page_texel.x, page_texel.y + 1, int(gpu_layer)), 0).r;
-		float delta_up = texelFetch(height_pages, ivec3(page_texel.x, page_texel.y - 1, int(gpu_layer)), 0).r;
-		analytic_slope_u += (delta_rt - delta_lf) / (2.0 * lod_spacing);
-		analytic_slope_v += (delta_dn - delta_up) / (2.0 * lod_spacing);
+	} else if (source_mode == 2u) {
+		// HybridAdditiveDelta mode: analytic base + single-fetch additive delta derivatives
+		if (gpu_layer > 0u) {
+			vec3 delta_sample = sample_bilinear_page_with_derivatives(height_pages, vec2(vx, vz), gpu_layer, lod_spacing);
+			final_y = h_center + delta_sample.x;
+			final_slope_u += delta_sample.y;
+			final_slope_v += delta_sample.z;
+		} else {
+			final_y = h_center;
+		}
+	} else {
+		// AnalyticBase mode (Production): immediate canonical analytic height and slopes
+		final_y = h_center;
 	}
-
-	if (source_mode == 1u && gpu_layer > 0u) {
-		ivec2 page_texel = ivec2(int(round(vx)) + 1, int(round(vz)) + 1);
-		float page_rt = texelFetch(height_pages, ivec3(page_texel.x + 1, page_texel.y, int(gpu_layer)), 0).r;
-		float page_lf = texelFetch(height_pages, ivec3(page_texel.x - 1, page_texel.y, int(gpu_layer)), 0).r;
-		float page_dn = texelFetch(height_pages, ivec3(page_texel.x, page_texel.y + 1, int(gpu_layer)), 0).r;
-		float page_up = texelFetch(height_pages, ivec3(page_texel.x, page_texel.y - 1, int(gpu_layer)), 0).r;
-		analytic_slope_u = (page_rt - page_lf) / (2.0 * lod_spacing);
-		analytic_slope_v = (page_dn - page_up) / (2.0 * lod_spacing);
-	}
-
-	vec3 du = vec3(1.0, analytic_slope_u, 0.0);
-	vec3 dv = vec3(0.0, analytic_slope_v, 1.0);
-
-	NORMAL = normalize(cross(dv, du));
+	VERTEX.y = final_y;
 
 	debug_final_y_m = final_y;
 	float presented_final_y = final_y;
 	if (chp_debug_negative_height_exaggeration && final_y < 0.0) {
 		presented_final_y = final_y * 10.0;
 	}
+
+	vec3 bx = MODEL_MATRIX[0].xyz;
+	vec3 by = MODEL_MATRIX[1].xyz;
+	vec3 bz = MODEL_MATRIX[2].xyz;
+	float bx2 = dot(bx, bx);
+	float by2 = dot(by, by);
+	float bz2 = dot(bz, bz);
+
+	vec3 target_normal_cam = normalize(vec3(-final_slope_u, 1.0, -final_slope_v));
 
 	if (chp_gpu_effective && uses_camera_relative_render && chp_debug_reconstruction_mode > 0) {
 		vec3 flat_model = vec3(VERTEX.x, presented_final_y, VERTEX.z);
@@ -983,20 +1132,13 @@ void vertex() {
 			// Mode 1: Identity reconstruction (flat target)
 			target_camera_relative = flat_camera_relative;
 		} else {
-			// Mode 2: CHP curved position
+			// Mode 2: CHP curved position and composed curved normal
 			vec2 q = flat_camera_relative.xz;
-			vec3 p_surface = eval_chp_curved_surface_position(q, presented_final_y);
-			target_camera_relative = p_surface - vec3(0.0, chp_camera_altitude_m, 0.0);
+			target_camera_relative = eval_chp_curved_surface_position(q, presented_final_y) - vec3(0.0, chp_camera_altitude_m, 0.0);
+			target_normal_cam = eval_chp_curved_surface_normal(q, presented_final_y, final_slope_u, final_slope_v);
 		}
 
 		// Exact inverse reconstruction for orthogonal scaled model basis
-		vec3 bx = MODEL_MATRIX[0].xyz;
-		vec3 by = MODEL_MATRIX[1].xyz;
-		vec3 bz = MODEL_MATRIX[2].xyz;
-		float bx2 = dot(bx, bx);
-		float by2 = dot(by, by);
-		float bz2 = dot(bz, bz);
-
 		if (bx2 > 1e-12 && by2 > 1e-12 && bz2 > 1e-12) {
 			vec3 delta = target_camera_relative - MODEL_MATRIX[3].xyz;
 			vec3 model_local_target = vec3(
@@ -1006,6 +1148,17 @@ void vertex() {
 			);
 			VERTEX = model_local_target;
 		}
+	}
+
+	// Map presentation normal back into model-local space for MODEL_NORMAL_MATRIX
+	if (bx2 > 1e-12 && by2 > 1e-12 && bz2 > 1e-12) {
+		NORMAL = normalize(vec3(
+			dot(bx, target_normal_cam),
+			dot(by, target_normal_cam),
+			dot(bz, target_normal_cam)
+		));
+	} else {
+		NORMAL = normalize(vec3(-final_slope_u * lod_spacing, 1.0, -final_slope_v * lod_spacing));
 	}
 
 	if (uses_camera_relative_render) {
@@ -1042,6 +1195,16 @@ void fragment() {
 		} else {
 			base_color = vec3(0.9, 0.8, 0.2); // Golden yellow for nonnegative height
 		}
+	}
+	if (bccm_debug_visual_mode == 1) {
+		base_color = NORMAL * 0.5 + 0.5;
+	} else if (bccm_debug_visual_mode == 2) {
+		base_color = vec3(debug_morph_mu);
+	} else if (bccm_debug_visual_mode == 3) {
+		if (debug_recursion_depth < 0.5) base_color = vec3(0.1, 0.2, 0.8);
+		else if (debug_recursion_depth < 1.5) base_color = vec3(0.2, 0.8, 0.2);
+		else if (debug_recursion_depth < 2.5) base_color = vec3(0.9, 0.8, 0.1);
+		else base_color = vec3(0.9, 0.1, 0.1);
 	}
 	ALBEDO = base_color;
 }

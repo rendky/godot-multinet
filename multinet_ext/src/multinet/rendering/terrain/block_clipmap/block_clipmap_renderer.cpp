@@ -475,6 +475,7 @@ bool BlockClipmapRenderer::initialize(
 		initial_layers[i] = empty_img;
 	}
 
+	const bool is_certified_profile = (profile.candidate_grid_radius == 4 && profile.inner_hole_radius == 2);
 	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
 		LODLevelData& level = levels[lod];
 		level.index = lod;
@@ -488,7 +489,8 @@ bool BlockClipmapRenderer::initialize(
 			false,
 			true  // use_custom_data
 		);
-		rs->multimesh_set_mesh(level.multimesh_rid, diamond_triangulation_enabled ? master_mesh_rid : legacy_mesh_rid);
+		const godot::RID selected_mesh = (diamond_triangulation_enabled && lod == 0) ? master_mesh_rid : legacy_mesh_rid;
+		rs->multimesh_set_mesh(level.multimesh_rid, selected_mesh);
 		rs->multimesh_set_custom_aabb(
 			level.multimesh_rid,
 			godot::AABB(godot::Vector3(0, 0, 0), godot::Vector3(0.01f, 0.01f, 0.01f))
@@ -519,6 +521,9 @@ bool BlockClipmapRenderer::initialize(
 		if (!level.material_rid.is_valid()) { cleanup(); return false; }
 		rs->material_set_shader(level.material_rid, shader_data.shader_rid);
 		rs->material_set_param(level.material_rid, "height_pages", level.texture_array_rid);
+		rs->material_set_param(level.material_rid, "parent_morph_enabled", is_certified_profile);
+		rs->material_set_param(level.material_rid, "current_lod_index", static_cast<uint32_t>(lod));
+		rs->material_set_param(level.material_rid, "active_ordinary_level_count", static_cast<uint32_t>(profile.level_count));
 		rs->instance_geometry_set_material_override(level.instance_rid, level.material_rid);
 
 		// Layer 0: permanent zero scalar page.
@@ -562,6 +567,7 @@ void BlockClipmapRenderer::bind_material_uniforms(
 #ifndef MULTINET_TEST
 	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
 	if (!rs) return;
+	const bool is_certified_profile = (profile.candidate_grid_radius == 4 && profile.inner_hole_radius == 2);
 
 	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
 		godot::RID mat = levels[lod].material_rid;
@@ -578,6 +584,9 @@ void BlockClipmapRenderer::bind_material_uniforms(
 		rs->material_set_param(mat, "logical_area_radius_m", static_cast<float>(scale.logical_area_radius_m));
 		rs->material_set_param(mat, "lod_spacing", static_cast<float>(profile.get_lod_spacing(lod)));
 		rs->material_set_param(mat, "lod_block_size", static_cast<float>(profile.get_lod_block_size(lod)));
+		rs->material_set_param(mat, "parent_morph_enabled", is_certified_profile);
+		rs->material_set_param(mat, "current_lod_index", static_cast<uint32_t>(lod));
+		rs->material_set_param(mat, "active_ordinary_level_count", static_cast<uint32_t>(profile.level_count));
 		rs->material_set_param(mat, "world_domain_topology", 1u);
 		rs->material_set_param(mat, "finite_half_extent_x_m", 0.0f);
 		rs->material_set_param(mat, "finite_half_extent_z_m", 0.0f);
@@ -600,6 +609,7 @@ void BlockClipmapRenderer::bind_material_uniforms(
 		rs->material_set_param(mat, "chp_debug_reconstruction_mode", chp_debug_reconstruction_mode);
 		rs->material_set_param(mat, "chp_debug_negative_height_color", chp_debug_negative_height_color);
 		rs->material_set_param(mat, "chp_debug_negative_height_exaggeration", chp_debug_negative_height_exaggeration);
+		rs->material_set_param(mat, "bccm_debug_visual_mode", bccm_debug_visual_mode);
 
 		const TerrainRootLatticeAnchors initial_anchors = compute_root_anchors(Multinet::FramePosition64{ 1.0, 0.0, 0.0 }, scale.logical_area_radius_m, recipe);
 		rs->material_set_param(mat, "terrain_root_cell_0", godot::Vector3i(initial_anchors.cell[0][0], initial_anchors.cell[0][1], initial_anchors.cell[0][2]));
@@ -635,6 +645,7 @@ void BlockClipmapRenderer::bind_material_uniforms(
 #ifndef MULTINET_TEST
 	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
 	if (!rs) return;
+	const bool is_certified_profile = (profile.candidate_grid_radius == 4 && profile.inner_hole_radius == 2);
 	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
 		godot::RID mat = levels[lod].material_rid;
 		if (!mat.is_valid()) continue;
@@ -649,6 +660,9 @@ void BlockClipmapRenderer::bind_material_uniforms(
 		rs->material_set_param(mat, "logical_area_radius_m", 0.0f);
 		rs->material_set_param(mat, "lod_spacing", static_cast<float>(profile.get_lod_spacing(lod)));
 		rs->material_set_param(mat, "lod_block_size", static_cast<float>(profile.get_lod_block_size(lod)));
+		rs->material_set_param(mat, "parent_morph_enabled", is_certified_profile);
+		rs->material_set_param(mat, "current_lod_index", static_cast<uint32_t>(lod));
+		rs->material_set_param(mat, "active_ordinary_level_count", static_cast<uint32_t>(profile.level_count));
 		rs->material_set_param(mat, "world_domain_topology", 0u);
 		rs->material_set_param(mat, "finite_half_extent_x_m", static_cast<float>(domain.finite.half_extent_x_mm) * 0.001f);
 		rs->material_set_param(mat, "finite_half_extent_z_m", static_cast<float>(domain.finite.half_extent_z_mm) * 0.001f);
@@ -665,6 +679,7 @@ void BlockClipmapRenderer::bind_material_uniforms(
 		rs->material_set_param(mat, "chp_debug_reconstruction_mode", chp_debug_reconstruction_mode);
 		rs->material_set_param(mat, "chp_debug_negative_height_color", chp_debug_negative_height_color);
 		rs->material_set_param(mat, "chp_debug_negative_height_exaggeration", chp_debug_negative_height_exaggeration);
+		rs->material_set_param(mat, "bccm_debug_visual_mode", bccm_debug_visual_mode);
 	}
 #endif
 }
@@ -686,11 +701,24 @@ void BlockClipmapRenderer::set_diamond_triangulation_enabled(bool enabled) noexc
 #ifndef MULTINET_TEST
 	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
 	if (!rs) return;
-	const godot::RID selected_mesh = diamond_triangulation_enabled ? master_mesh_rid : legacy_mesh_rid;
-	if (!selected_mesh.is_valid()) return;
 	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
 		if (levels[lod].multimesh_rid.is_valid()) {
+			const godot::RID selected_mesh = (diamond_triangulation_enabled && lod == 0) ? master_mesh_rid : legacy_mesh_rid;
 			rs->multimesh_set_mesh(levels[lod].multimesh_rid, selected_mesh);
+		}
+	}
+#endif
+}
+
+void BlockClipmapRenderer::set_bccm_debug_visual_mode(int mode) noexcept {
+	bccm_debug_visual_mode = mode;
+#ifndef MULTINET_TEST
+	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
+	if (!rs) return;
+	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+		godot::RID mat = levels[lod].material_rid;
+		if (mat.is_valid()) {
+			rs->material_set_param(mat, "bccm_debug_visual_mode", mode);
 		}
 	}
 #endif
@@ -698,12 +726,32 @@ void BlockClipmapRenderer::set_diamond_triangulation_enabled(bool enabled) noexc
 
 void BlockClipmapRenderer::update_frozen_view_presentation_delta(
 	const godot::Vector3& p_camera_delta,
-	const multinet::rendering::chp::CurvedHorizonView* chp_view
+	const multinet::rendering::chp::CurvedHorizonView* chp_view,
+	double delta_seconds
 ) noexcept {
 	const bool chp_effective = chp_view && chp_view->chp_effective && has_active_presentation_binding;
 	last_bound_chp_gpu_effective_ = chp_effective;
 	if (chp_effective) {
 		last_bound_chp_camera_altitude_m_ = static_cast<float>(chp_view->camera_surface_height_m);
+	}
+
+	last_cut_diagnostics_.freeze_update_active = true;
+	last_cut_diagnostics_.camera_delta_x_m = p_camera_delta.x;
+	last_cut_diagnostics_.camera_delta_z_m = p_camera_delta.z;
+	last_cut_diagnostics_.ground_plane_distance_moved_m = std::sqrt(
+		p_camera_delta.x * p_camera_delta.x + p_camera_delta.z * p_camera_delta.z
+	);
+	last_cut_diagnostics_.delta_seconds = delta_seconds;
+	if (delta_seconds > 0.0 && std::isfinite(delta_seconds)) {
+		last_cut_diagnostics_.estimated_speed_m_s = last_cut_diagnostics_.ground_plane_distance_moved_m / delta_seconds;
+		last_cut_diagnostics_.estimated_speed_km_s = last_cut_diagnostics_.estimated_speed_m_s * 0.001;
+	} else {
+		last_cut_diagnostics_.estimated_speed_m_s = 0.0;
+		last_cut_diagnostics_.estimated_speed_km_s = 0.0;
+	}
+	last_cut_diagnostics_.chp_effective = chp_effective;
+	if (chp_view) {
+		last_cut_diagnostics_.chp_signed_altitude_m = static_cast<float>(chp_view->camera_surface_height_m);
 	}
 
 #ifndef MULTINET_TEST
@@ -771,6 +819,22 @@ void BlockClipmapRenderer::update_frozen_view_presentation(
 ) noexcept {
 	const godot::Vector3 delta = p_camera_world_position - active_view_world_position;
 	update_frozen_view_presentation_delta(delta, chp_view);
+}
+
+void BlockClipmapRenderer::set_parent_morph_view_offset(const godot::Vector2& p_offset_m) noexcept {
+#ifndef MULTINET_TEST
+	if (!is_initialized) return;
+	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
+	if (!rs) return;
+	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+		godot::RID material = levels[lod].material_rid;
+		if (material.is_valid()) {
+			rs->material_set_param(material, "parent_morph_view_offset_m", p_offset_m);
+		}
+	}
+#else
+	(void)p_offset_m;
+#endif
 }
 
 void BlockClipmapRenderer::set_frozen_frustum_visualization(
@@ -859,11 +923,12 @@ void BlockClipmapRenderer::clear_frozen_frustum_visualization() noexcept {
 			rs->free_rid(frozen_frustum_mesh_rid_);
 			frozen_frustum_mesh_rid_ = godot::RID();
 		}
+		frozen_frustum_transform_ = godot::Transform3D();
 	}
 #endif
 	has_frozen_frustum_ = false;
-	frozen_frustum_transform_ = godot::Transform3D();
 }
+
 
 void BlockClipmapRenderer::initialize_cpu_state_for_test(
 	const Multinet::WorldScaleManifest& scale,
@@ -976,10 +1041,14 @@ void BlockClipmapRenderer::cleanup() {
 	active_domain = Multinet::WorldDomainManifest{};
 	profile.level_count = 8;
 	has_active_presentation_binding = false;
+
+#ifndef MULTINET_TEST
 	active_presentation_basis = godot::Basis();
 	active_presentation_origin = godot::Vector3();
 	active_view_world_position = godot::Vector3();
+#endif
 	bound_logical_chart_root_ = TerrainSamplePatchKey{};
+
 	bound_logical_chart_root_presentation_x_m_ = 0.0;
 	bound_logical_chart_root_presentation_z_m_ = 0.0;
 	has_bound_logical_chart_root_ = false;
@@ -1061,7 +1130,8 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 	const BCCMCameraState& cam_state,
 	const BCCMSourceExpectation& expectation,
 	Multinet::TerrainRenderSource* terrain_source,
-	const multinet::rendering::chp::CurvedHorizonView* chp_view
+	const multinet::rendering::chp::CurvedHorizonView* chp_view,
+	double delta_seconds
 ) {
 	TerrainUpdateResult result;
 	if (!is_initialized) return result;
@@ -1176,6 +1246,43 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 	}
 	last_streaming_diagnostics = StreamingDiagnosticsSnapshot{};
 
+	cut_render_update_serial_++;
+	FrameCutDiagnostics frame_cut_diag{};
+	frame_cut_diag.render_update_serial = cut_render_update_serial_;
+	frame_cut_diag.presentation_observer_x_m = active_cam_u;
+	frame_cut_diag.presentation_observer_z_m = active_cam_v;
+	frame_cut_diag.canonical_face = static_cast<uint8_t>(cam_state.canonical_position.face);
+	frame_cut_diag.canonical_u_m = cam_state.canonical_position.u_m;
+	frame_cut_diag.canonical_v_m = cam_state.canonical_position.v_m;
+	frame_cut_diag.delta_seconds = delta_seconds;
+
+	if (has_last_cut_cam_pos_) {
+		frame_cut_diag.camera_delta_x_m = active_cam_u - last_cut_cam_u_;
+		frame_cut_diag.camera_delta_z_m = active_cam_v - last_cut_cam_v_;
+		frame_cut_diag.ground_plane_distance_moved_m = std::sqrt(
+			frame_cut_diag.camera_delta_x_m * frame_cut_diag.camera_delta_x_m +
+			frame_cut_diag.camera_delta_z_m * frame_cut_diag.camera_delta_z_m
+		);
+		if (delta_seconds > 0.0 && std::isfinite(delta_seconds)) {
+			frame_cut_diag.estimated_speed_m_s = frame_cut_diag.ground_plane_distance_moved_m / delta_seconds;
+			frame_cut_diag.estimated_speed_km_s = frame_cut_diag.estimated_speed_m_s * 0.001;
+		} else {
+			frame_cut_diag.estimated_speed_m_s = 0.0;
+			frame_cut_diag.estimated_speed_km_s = 0.0;
+		}
+	}
+	last_cut_cam_u_ = active_cam_u;
+	last_cut_cam_v_ = active_cam_v;
+	has_last_cut_cam_pos_ = true;
+
+
+	frame_cut_diag.active_lod_count = profile.level_count;
+	frame_cut_diag.bccm_streams_submitted = profile.level_count;
+	frame_cut_diag.chp_effective = chp_view && chp_view->chp_effective;
+	if (chp_view) {
+		frame_cut_diag.chp_signed_altitude_m = static_cast<float>(chp_view->camera_surface_height_m);
+	}
+
 	// Phase 3 — Unified FrameDemandTable Construction & Candidate Enumeration
 	FrameDemandTable demand_table;
 
@@ -1249,17 +1356,49 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 	};
 
 	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
-		const double block_size = profile.get_lod_block_size(lod);
-		const double snap_size = (lod + 1 < profile.level_count)
-			? profile.get_lod_block_size(lod + 1)
-			: block_size;
+		const QuantizedLODCenter q_center = compute_lod_center(active_cam_u, active_cam_v, lod, profile);
+		const int64_t center_bx = q_center.center_bx;
+		const int64_t center_bv = q_center.center_bv;
+		const double block_size = q_center.block_size_m;
+		const double snap_size = q_center.snap_size_m;
 
-		int64_t center_bx = static_cast<int64_t>(std::floor(
-			(std::floor(active_cam_u / snap_size) * snap_size) / block_size
-		));
-		int64_t center_bv = static_cast<int64_t>(std::floor(
-			(std::floor(active_cam_v / snap_size) * snap_size) / block_size
-		));
+		LODCutDiagnostics& lod_cut_diag = frame_cut_diag.lods[lod];
+		lod_cut_diag.current_center_bx = center_bx;
+		lod_cut_diag.current_center_bv = center_bv;
+		lod_cut_diag.snap_period_m = snap_size;
+		lod_cut_diag.candidate_count_before = levels[lod].last_candidate_count;
+
+		if (has_last_cut_center_[lod]) {
+			lod_cut_diag.prev_center_bx = last_cut_center_bx_[lod];
+			lod_cut_diag.prev_center_bv = last_cut_center_bv_[lod];
+			lod_cut_diag.delta_center_bx = center_bx - last_cut_center_bx_[lod];
+			lod_cut_diag.delta_center_bv = center_bv - last_cut_center_bv_[lod];
+			lod_cut_diag.delta_center_u_m = static_cast<double>(lod_cut_diag.delta_center_bx) * block_size;
+			lod_cut_diag.delta_center_v_m = static_cast<double>(lod_cut_diag.delta_center_bv) * block_size;
+			lod_cut_diag.snap_steps_crossed_u = static_cast<uint32_t>(std::llround(std::abs(lod_cut_diag.delta_center_u_m) / snap_size));
+			lod_cut_diag.snap_steps_crossed_v = static_cast<uint32_t>(std::llround(std::abs(lod_cut_diag.delta_center_v_m) / snap_size));
+			lod_cut_diag.max_snap_steps_crossed = std::max(lod_cut_diag.snap_steps_crossed_u, lod_cut_diag.snap_steps_crossed_v);
+			lod_cut_diag.skipped_snap_event = (lod_cut_diag.max_snap_steps_crossed > 1);
+
+			if (lod_cut_diag.skipped_snap_event) {
+				frame_cut_diag.frame_skipped_snap_events++;
+				total_skipped_snap_events_++;
+			}
+			if (lod_cut_diag.max_snap_steps_crossed > frame_cut_diag.frame_largest_snap_steps) {
+				frame_cut_diag.frame_largest_snap_steps = lod_cut_diag.max_snap_steps_crossed;
+				frame_cut_diag.worst_lod = lod;
+				if (lod_cut_diag.snap_steps_crossed_u > lod_cut_diag.snap_steps_crossed_v) {
+					frame_cut_diag.worst_axis = 1;
+				} else if (lod_cut_diag.snap_steps_crossed_v > lod_cut_diag.snap_steps_crossed_u) {
+					frame_cut_diag.worst_axis = 2;
+				} else {
+					frame_cut_diag.worst_axis = 3;
+				}
+			}
+		}
+		last_cut_center_bx_[lod] = center_bx;
+		last_cut_center_bv_[lod] = center_bv;
+		has_last_cut_center_[lod] = true;
 
 		int32_t hole_dx = 0;
 		int32_t hole_dz = 0;
@@ -1272,6 +1411,20 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 			));
 			hole_dx = static_cast<int32_t>(prev_bx - center_bx);
 			hole_dz = static_cast<int32_t>(prev_bv - center_bv);
+
+			lod_cut_diag.current_hole_dx = hole_dx;
+			lod_cut_diag.current_hole_dz = hole_dz;
+			if (levels[lod].has_last_hole) {
+				lod_cut_diag.prev_hole_dx = levels[lod].last_hole_dx;
+				lod_cut_diag.prev_hole_dz = levels[lod].last_hole_dz;
+				lod_cut_diag.hole_delta_dx = hole_dx - levels[lod].last_hole_dx;
+				lod_cut_diag.hole_delta_dz = hole_dz - levels[lod].last_hole_dz;
+				lod_cut_diag.hole_movement_event = (lod_cut_diag.hole_delta_dx != 0 || lod_cut_diag.hole_delta_dz != 0);
+				lod_cut_diag.hole_steps_crossed = static_cast<uint32_t>(std::max(std::abs(lod_cut_diag.hole_delta_dx), std::abs(lod_cut_diag.hole_delta_dz)));
+			}
+			levels[lod].last_hole_dx = hole_dx;
+			levels[lod].last_hole_dz = hole_dz;
+			levels[lod].has_last_hole = true;
 		}
 
 		int32_t r = profile.candidate_grid_radius;
@@ -1545,9 +1698,48 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 			}
 		}
 
-		levels[lod].last_candidate_count = lod_candidate_counts[lod];
-		for (size_t i = 0; i < lod_candidate_counts[lod]; ++i) {
-			levels[lod].diagnostic_candidate_keys[i] = lod_candidates[lod][i].key;
+		lod_cut_diag.candidate_count_after = lod_candidate_counts[lod];
+		if (high_speed_cut_diagnostics_enabled_) {
+			uint32_t retained = 0;
+			const uint32_t prev_count = levels[lod].last_candidate_count;
+			const uint32_t curr_count = lod_candidate_counts[lod];
+
+			for (uint32_t curr_i = 0; curr_i < curr_count; ++curr_i) {
+				const auto& curr_key = lod_candidates[lod][curr_i].key;
+				for (uint32_t prev_i = 0; prev_i < prev_count; ++prev_i) {
+					if (levels[lod].diagnostic_candidate_keys[prev_i] == curr_key) {
+						retained++;
+						break;
+					}
+				}
+			}
+			if (prev_count > 0) {
+				lod_cut_diag.candidates_retained = retained;
+				lod_cut_diag.candidates_added = (curr_count > retained) ? (curr_count - retained) : 0;
+				lod_cut_diag.candidates_removed = (prev_count > retained) ? (prev_count - retained) : 0;
+				lod_cut_diag.turnover_fraction = static_cast<float>(lod_cut_diag.candidates_removed) / static_cast<float>(prev_count);
+			} else {
+				lod_cut_diag.candidates_retained = curr_count;
+				lod_cut_diag.candidates_added = 0;
+				lod_cut_diag.candidates_removed = 0;
+				lod_cut_diag.turnover_fraction = 0.0f;
+			}
+
+
+			if (lod_cut_diag.turnover_fraction > frame_cut_diag.worst_candidate_turnover) {
+				frame_cut_diag.worst_candidate_turnover = lod_cut_diag.turnover_fraction;
+			}
+
+			levels[lod].last_candidate_count = lod_candidate_counts[lod];
+			for (size_t i = 0; i < lod_candidate_counts[lod]; ++i) {
+				levels[lod].diagnostic_candidate_keys[i] = lod_candidates[lod][i].key;
+			}
+		} else {
+			levels[lod].last_candidate_count = lod_candidate_counts[lod];
+			lod_cut_diag.candidates_retained = 0;
+			lod_cut_diag.candidates_added = 0;
+			lod_cut_diag.candidates_removed = 0;
+			lod_cut_diag.turnover_fraction = 0.0f;
 		}
 	}
 	last_streaming_diagnostics.frame_demand_count = static_cast<uint32_t>(demand_table.count);
@@ -2161,6 +2353,34 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 		);
 	}
 
+	uint32_t frame_buffers_rewritten = 0;
+	size_t frame_bytes_uploaded = 0;
+	uint32_t total_instances = 0;
+
+	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+		const uint32_t vis_count = result.lods[lod].visible_count;
+		const bool changed = result.lods[lod].buffer_changed;
+		total_instances += vis_count;
+
+		frame_cut_diag.lods[lod].submitted_instance_count = vis_count;
+		frame_cut_diag.lods[lod].instance_buffer_changed = changed;
+
+		if (changed) {
+			frame_buffers_rewritten++;
+			total_multimesh_buffer_rewrites_++;
+			constexpr size_t FULL_FLOAT_COUNT = BlockClipmapProfile::MAX_CANDIDATES * 16;
+			const size_t bytes = FULL_FLOAT_COUNT * sizeof(float);
+			frame_cut_diag.lods[lod].instance_bytes_uploaded = bytes;
+			frame_bytes_uploaded += bytes;
+			cumulative_instance_bytes_uploaded_ += bytes;
+		}
+	}
+
+	frame_cut_diag.total_instances_submitted = total_instances;
+	frame_cut_diag.multimesh_buffers_rewritten = frame_buffers_rewritten;
+	frame_cut_diag.total_instance_bytes_uploaded = frame_bytes_uploaded;
+	last_cut_diagnostics_ = frame_cut_diag;
+
 	// Apply slot retirement for blocks whose submitted instance resolved to ExactResident or ExactReadyEmpty
 	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
 		for (uint32_t i = 0; i < last_submission_plan.lods[lod].count; ++i) {
@@ -2205,8 +2425,10 @@ void BlockClipmapRenderer::update_with_view(
 	const BCCMCameraState& cam_state,
 	const BCCMSourceExpectation& expectation,
 	Multinet::TerrainRenderSource* terrain_source,
-	const multinet::rendering::chp::CurvedHorizonView* chp_view
+	const multinet::rendering::chp::CurvedHorizonView* chp_view,
+	double delta_seconds
 ) {
+
 	if (!is_initialized) return;
 	if (!cam_state.is_visible) return;
 	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
@@ -2304,9 +2526,16 @@ void BlockClipmapRenderer::update_with_view(
 	if (chp_effective) {
 		last_bound_chp_camera_altitude_m_ = static_cast<float>(chp_view->camera_surface_height_m);
 	}
+	const bool is_certified_profile = (profile.candidate_grid_radius == 4 && profile.inner_hole_radius == 2);
 	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
 		godot::RID material = levels[lod].material_rid;
 		if (!material.is_valid()) continue;
+		rs->material_set_param(material, "lod_spacing", static_cast<float>(profile.get_lod_spacing(lod)));
+		rs->material_set_param(material, "lod_block_size", static_cast<float>(profile.get_lod_block_size(lod)));
+		rs->material_set_param(material, "parent_morph_enabled", is_certified_profile);
+		rs->material_set_param(material, "parent_morph_view_offset_m", godot::Vector2(0.0f, 0.0f));
+		rs->material_set_param(material, "current_lod_index", static_cast<uint32_t>(lod));
+		rs->material_set_param(material, "active_ordinary_level_count", static_cast<uint32_t>(profile.level_count));
 		rs->material_set_param(material, "chp_gpu_effective", chp_effective);
 		if (chp_effective) {
 			rs->material_set_param(material, "chp_function_class", static_cast<uint32_t>(chp_view->profile.requested.function_class));
@@ -2320,9 +2549,10 @@ void BlockClipmapRenderer::update_with_view(
 			rs->material_set_param(material, "chp_debug_negative_height_color", chp_debug_negative_height_color);
 			rs->material_set_param(material, "chp_debug_negative_height_exaggeration", chp_debug_negative_height_exaggeration);
 		}
+		rs->material_set_param(material, "bccm_debug_visual_mode", bccm_debug_visual_mode);
 	}
 
-	TerrainUpdateResult result = compute_update(p_camera_world_position, p_frustum, scale, cam_state, expectation, terrain_source, chp_view);
+	TerrainUpdateResult result = compute_update(p_camera_world_position, p_frustum, scale, cam_state, expectation, terrain_source, chp_view, delta_seconds);
 
 	// Phase 6 — two-phase GPU finalization: re-validate each upload before committing.
 	auto patch_rejected = [&](uint8_t failed_lod, uint32_t failed_layer, const char* reason) {
@@ -2425,12 +2655,13 @@ void BlockClipmapRenderer::update(
 	const BCCMCameraState& cam_state,
 	const BCCMSourceExpectation& expectation,
 	Multinet::TerrainRenderSource* terrain_source,
-	const multinet::rendering::chp::CurvedHorizonView* chp_view
+	const multinet::rendering::chp::CurvedHorizonView* chp_view,
+	double delta_seconds
 ) {
 	if (!p_camera) return;
 	godot::Vector3 cam_pos = p_camera->get_global_position();
 	FrustumPlanes frustum = FrustumPlanes::extract_from_camera(p_camera);
-	update_with_view(cam_pos, frustum, scale, cam_state, expectation, terrain_source, chp_view);
+	update_with_view(cam_pos, frustum, scale, cam_state, expectation, terrain_source, chp_view, delta_seconds);
 }
 #else
 void BlockClipmapRenderer::update_with_view(
@@ -2440,7 +2671,8 @@ void BlockClipmapRenderer::update_with_view(
 	const BCCMCameraState& cam_state,
 	const BCCMSourceExpectation& expectation,
 	Multinet::TerrainRenderSource* terrain_source,
-	const multinet::rendering::chp::CurvedHorizonView* chp_view
+	const multinet::rendering::chp::CurvedHorizonView* chp_view,
+	double delta_seconds
 ) {}
 
 void BlockClipmapRenderer::update(
@@ -2449,9 +2681,11 @@ void BlockClipmapRenderer::update(
 	const BCCMCameraState& cam_state,
 	const BCCMSourceExpectation& expectation,
 	Multinet::TerrainRenderSource* terrain_source,
-	const multinet::rendering::chp::CurvedHorizonView* chp_view
+	const multinet::rendering::chp::CurvedHorizonView* chp_view,
+	double delta_seconds
 ) {}
 #endif
+
 
 BlockPlacement BlockClipmapRenderer::build_block_placement(
 	const TerrainRenderBlockKey& canonical_key,

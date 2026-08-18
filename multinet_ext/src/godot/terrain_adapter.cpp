@@ -280,6 +280,10 @@ void MultinetBCCMNode3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_chp_debug_negative_height_exaggeration"), &MultinetBCCMNode3D::get_chp_debug_negative_height_exaggeration);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "chp_debug_negative_height_exaggeration"), "set_chp_debug_negative_height_exaggeration", "get_chp_debug_negative_height_exaggeration");
 
+	ClassDB::bind_method(D_METHOD("set_bccm_debug_visual_mode", "mode"), &MultinetBCCMNode3D::set_bccm_debug_visual_mode);
+	ClassDB::bind_method(D_METHOD("get_bccm_debug_visual_mode"), &MultinetBCCMNode3D::get_bccm_debug_visual_mode);
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "bccm_debug_visual_mode"), "set_bccm_debug_visual_mode", "get_bccm_debug_visual_mode");
+
 
 	ClassDB::bind_method(D_METHOD("set_freeze_update", "freeze"), &MultinetBCCMNode3D::set_freeze_update);
 	ClassDB::bind_method(D_METHOD("get_freeze_update"), &MultinetBCCMNode3D::get_freeze_update);
@@ -363,7 +367,12 @@ void MultinetBCCMNode3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_camera_target", "path"), &MultinetBCCMNode3D::set_camera_target);
 	ClassDB::bind_method(D_METHOD("get_camera_target"), &MultinetBCCMNode3D::get_camera_target);
 	ADD_PROPERTY(PropertyInfo(Variant::NODE_PATH, "camera_target"), "set_camera_target", "get_camera_target");
+
+	ClassDB::bind_method(D_METHOD("set_high_speed_cut_diagnostics_enabled", "enabled"), &MultinetBCCMNode3D::set_high_speed_cut_diagnostics_enabled);
+	ClassDB::bind_method(D_METHOD("get_high_speed_cut_diagnostics_enabled"), &MultinetBCCMNode3D::get_high_speed_cut_diagnostics_enabled);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "high_speed_cut_diagnostics_enabled"), "set_high_speed_cut_diagnostics_enabled", "get_high_speed_cut_diagnostics_enabled");
 }
+
 
 void MultinetBCCMNode3D::_validate_property(PropertyInfo& p_property) const {
 	const StringName name = p_property.name;
@@ -1083,11 +1092,14 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 				continuous_camera_m_ = godot::Vector3(static_cast<float>(cur_cont_x), static_cast<float>(cur_cont_y), static_cast<float>(cur_cont_z));
 
 				if (bccm_renderer.initialized() && render_source && current_cam_state.frame_epoch > 0) {
+					const double delta_seconds = get_process_delta_time();
 					if (freeze_update) {
 						const godot::Vector3 camera_delta = continuous_camera_m_ - previous_continuous_camera_m_;
 						last_continuous_camera_delta_m_ = camera_delta;
 						previous_continuous_camera_m_ = continuous_camera_m_;
-						bccm_renderer.update_frozen_view_presentation_delta(camera_delta, &current_chp_view);
+						const godot::Vector3 freeze_camera_offset = continuous_camera_m_ - frozen_continuous_camera_anchor_m_;
+						bccm_renderer.set_parent_morph_view_offset(godot::Vector2(freeze_camera_offset.x, freeze_camera_offset.z));
+						bccm_renderer.update_frozen_view_presentation_delta(camera_delta, &current_chp_view, delta_seconds);
 					} else {
 						previous_continuous_camera_m_ = continuous_camera_m_;
 						last_continuous_camera_delta_m_ = godot::Vector3(0.0f, 0.0f, 0.0f);
@@ -1098,7 +1110,8 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 							current_cam_state,
 							source_expectation,
 							render_source.get(),
-							&current_chp_view
+							&current_chp_view,
+							delta_seconds
 						);
 					}
 				}
@@ -1144,6 +1157,7 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 				}
 
 				if (bccm_renderer.initialized() && render_source && current_cam_state.frame_epoch > 0) {
+					const double delta_seconds = get_process_delta_time();
 					current_cam_state.has_presentation_binding = current_cam_state.has_presentation_position;
 					current_cam_state.presentation_origin = godot::Vector3(0.0f, 0.0f, 0.0f);
 					current_cam_state.presentation_basis = godot::Basis();
@@ -1153,15 +1167,18 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 						const godot::Vector3 camera_delta = continuous_camera_m_ - previous_continuous_camera_m_;
 						last_continuous_camera_delta_m_ = camera_delta;
 						previous_continuous_camera_m_ = continuous_camera_m_;
-						bccm_renderer.update_frozen_view_presentation_delta(camera_delta, &current_chp_view);
+						const godot::Vector3 freeze_camera_offset = continuous_camera_m_ - frozen_continuous_camera_anchor_m_;
+						bccm_renderer.set_parent_morph_view_offset(godot::Vector2(freeze_camera_offset.x, freeze_camera_offset.z));
+						bccm_renderer.update_frozen_view_presentation_delta(camera_delta, &current_chp_view, delta_seconds);
 					} else {
 						previous_continuous_camera_m_ = continuous_camera_m_;
 						last_continuous_camera_delta_m_ = godot::Vector3(0.0f, 0.0f, 0.0f);
-						bccm_renderer.update(cam, manifest, current_cam_state, source_expectation, render_source.get(), &current_chp_view);
+						bccm_renderer.update(cam, manifest, current_cam_state, source_expectation, render_source.get(), &current_chp_view, delta_seconds);
 					}
 				}
 			}
 		}
+
 
 	} else if (p_what == NOTIFICATION_EXIT_TREE) {
 		free_rendering();
@@ -1630,6 +1647,14 @@ bool MultinetBCCMNode3D::get_chp_debug_negative_height_exaggeration() const {
 	return bccm_renderer.get_chp_debug_negative_height_exaggeration();
 }
 
+void MultinetBCCMNode3D::set_bccm_debug_visual_mode(int p_mode) {
+	bccm_renderer.set_bccm_debug_visual_mode(p_mode);
+}
+
+int MultinetBCCMNode3D::get_bccm_debug_visual_mode() const {
+	return bccm_renderer.get_bccm_debug_visual_mode();
+}
+
 void MultinetBCCMNode3D::set_freeze_update(bool p_freeze) {
 	if (p_freeze && !freeze_update) {
 		frozen_bccm_frame = current_cam_state.frame_epoch;
@@ -1641,20 +1666,32 @@ void MultinetBCCMNode3D::set_freeze_update(bool p_freeze) {
 		const double cur_cont_y = static_cast<double>(editor_view_snapshot.world_position.y);
 		const double cur_cont_z = static_cast<double>(editor_view_snapshot.world_position.z) + editor_presentation_rebase_offset_z_m;
 		continuous_camera_m_ = godot::Vector3(static_cast<float>(cur_cont_x), static_cast<float>(cur_cont_y), static_cast<float>(cur_cont_z));
+#endif
 		previous_continuous_camera_m_ = continuous_camera_m_;
 		frozen_continuous_camera_anchor_m_ = continuous_camera_m_;
 		last_continuous_camera_delta_m_ = godot::Vector3(0.0f, 0.0f, 0.0f);
-#endif
+		bccm_renderer.set_parent_morph_view_offset(godot::Vector2(0.0f, 0.0f));
 		frozen_frustum_snapshot_id_++;
 		frozen_frustum_active_ = true;
 	} else if (!p_freeze && freeze_update) {
 		frozen_frustum_active_ = false;
+		bccm_renderer.set_parent_morph_view_offset(godot::Vector2(0.0f, 0.0f));
 		bccm_renderer.clear_frozen_frustum_visualization();
 	}
 	freeze_update = p_freeze;
 }
 
+void MultinetBCCMNode3D::set_high_speed_cut_diagnostics_enabled(bool p_enabled) {
+	high_speed_cut_diagnostics_enabled = p_enabled;
+	bccm_renderer.set_high_speed_cut_diagnostics_enabled(p_enabled);
+}
+
+bool MultinetBCCMNode3D::get_high_speed_cut_diagnostics_enabled() const {
+	return high_speed_cut_diagnostics_enabled;
+}
+
 void MultinetBCCMNode3D::set_camera_target(const godot::NodePath& p_path) { camera_target = p_path; }
+
 godot::NodePath MultinetBCCMNode3D::get_camera_target() const { return camera_target; }
 
 // ---------------------------------------------------------------------------
@@ -1779,6 +1816,15 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 		dict[prefix + "_frac_z"] = sz - fz;
 		freq_diag *= static_cast<double>(recipe.legacy_signals.lacunarity);
 	}
+	const bool is_morph_certified = (bccm_renderer.get_profile().candidate_grid_radius == 4 && bccm_renderer.get_profile().inner_hole_radius == 2);
+	dict["phase_b2_morph_effective"] = is_morph_certified;
+	dict["phase_b2_morph_status"] = is_morph_certified
+		? godot::String("A2 / CERTIFIED r4-h2")
+		: godot::String("DISABLED / UNCERTIFIED PROFILE r") + godot::String::num_int64(bccm_renderer.get_profile().candidate_grid_radius) + "-h" + godot::String::num_int64(bccm_renderer.get_profile().inner_hole_radius);
+	dict["phase_b2_morph_diagnostic"] = is_morph_certified
+		? godot::String("Phase-B2 Morph: A2 / CERTIFIED r4-h2")
+		: godot::String("Phase-B2 Morph: DISABLED / UNCERTIFIED PROFILE r") + godot::String::num_int64(bccm_renderer.get_profile().candidate_grid_radius) + "-h" + godot::String::num_int64(bccm_renderer.get_profile().inner_hole_radius);
+
 	dict["runtime_ground_speed_m_s"] = runtime_ground_speed_m_s;
 	dict["runtime_vertical_speed_m_s"] = runtime_vertical_speed_m_s;
 	dict["runtime_total_speed_m_s"] = runtime_total_speed_m_s;
@@ -2060,6 +2106,63 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["editor_last_presentation_rebase_x_m"] = editor_last_presentation_rebase_x_m;
 	dict["editor_last_presentation_rebase_z_m"] = editor_last_presentation_rebase_z_m;
 #endif
+
+	const auto& cut_diag = bccm_renderer.get_cut_diagnostics();
+	dict["cut_render_update_serial"] = static_cast<int64_t>(cut_diag.render_update_serial);
+	dict["cut_camera_delta_x_m"] = cut_diag.camera_delta_x_m;
+	dict["cut_camera_delta_z_m"] = cut_diag.camera_delta_z_m;
+	dict["cut_ground_distance_moved_m"] = cut_diag.ground_plane_distance_moved_m;
+	dict["cut_delta_seconds"] = cut_diag.delta_seconds;
+	dict["cut_estimated_speed_m_s"] = cut_diag.estimated_speed_m_s;
+	dict["cut_estimated_speed_km_s"] = cut_diag.estimated_speed_km_s;
+	dict["high_speed_cut_diagnostics_enabled"] = high_speed_cut_diagnostics_enabled;
+	dict["cut_active_lod_count"] = cut_diag.active_lod_count;
+	dict["cut_total_instances_submitted"] = cut_diag.total_instances_submitted;
+	dict["bccm_streams_submitted"] = cut_diag.bccm_streams_submitted;
+	dict["cut_multimesh_buffers_rewritten"] = cut_diag.multimesh_buffers_rewritten;
+	dict["cut_total_instance_bytes_uploaded"] = static_cast<int64_t>(cut_diag.total_instance_bytes_uploaded);
+	dict["cut_cumulative_instance_bytes_uploaded"] = static_cast<int64_t>(bccm_renderer.get_cumulative_instance_bytes_uploaded());
+	dict["cut_total_skipped_snaps"] = static_cast<int64_t>(bccm_renderer.get_total_skipped_snap_events());
+	dict["cut_total_buffer_rewrites"] = static_cast<int64_t>(bccm_renderer.get_total_multimesh_buffer_rewrites());
+	dict["cut_frame_skipped_snap_events"] = cut_diag.frame_skipped_snap_events;
+	dict["cut_frame_largest_snap_steps"] = cut_diag.frame_largest_snap_steps;
+	dict["cut_worst_lod"] = cut_diag.worst_lod;
+	dict["cut_worst_axis"] = cut_diag.worst_axis;
+	dict["cut_worst_candidate_turnover_pct"] = cut_diag.worst_candidate_turnover * 100.0f;
+
+	for (uint8_t lod = 0; lod < 8; ++lod) {
+		godot::String lod_p = "cut_lod_" + godot::String::num_int64(lod);
+		const auto& ldiag = cut_diag.lods[lod];
+		dict[lod_p + "_prev_center_bx"] = static_cast<int64_t>(ldiag.prev_center_bx);
+		dict[lod_p + "_prev_center_bv"] = static_cast<int64_t>(ldiag.prev_center_bv);
+		dict[lod_p + "_curr_center_bx"] = static_cast<int64_t>(ldiag.current_center_bx);
+		dict[lod_p + "_curr_center_bv"] = static_cast<int64_t>(ldiag.current_center_bv);
+		dict[lod_p + "_delta_center_bx"] = static_cast<int64_t>(ldiag.delta_center_bx);
+		dict[lod_p + "_delta_center_bv"] = static_cast<int64_t>(ldiag.delta_center_bv);
+		dict[lod_p + "_delta_center_u_m"] = ldiag.delta_center_u_m;
+		dict[lod_p + "_delta_center_v_m"] = ldiag.delta_center_v_m;
+		dict[lod_p + "_snap_period_m"] = ldiag.snap_period_m;
+		dict[lod_p + "_snap_steps_u"] = ldiag.snap_steps_crossed_u;
+		dict[lod_p + "_snap_steps_v"] = ldiag.snap_steps_crossed_v;
+		dict[lod_p + "_max_snap_steps"] = ldiag.max_snap_steps_crossed;
+		dict[lod_p + "_skipped_snap"] = ldiag.skipped_snap_event;
+		dict[lod_p + "_hole_dx"] = ldiag.current_hole_dx;
+		dict[lod_p + "_hole_dz"] = ldiag.current_hole_dz;
+		dict[lod_p + "_hole_delta_dx"] = ldiag.hole_delta_dx;
+		dict[lod_p + "_hole_delta_dz"] = ldiag.hole_delta_dz;
+		dict[lod_p + "_hole_moved"] = ldiag.hole_movement_event;
+		dict[lod_p + "_hole_steps"] = ldiag.hole_steps_crossed;
+		dict[lod_p + "_cand_before"] = ldiag.candidate_count_before;
+		dict[lod_p + "_cand_after"] = ldiag.candidate_count_after;
+		dict[lod_p + "_cand_retained"] = ldiag.candidates_retained;
+		dict[lod_p + "_cand_added"] = ldiag.candidates_added;
+		dict[lod_p + "_cand_removed"] = ldiag.candidates_removed;
+		dict[lod_p + "_turnover_pct"] = ldiag.turnover_fraction * 100.0f;
+		dict[lod_p + "_submitted_instances"] = ldiag.submitted_instance_count;
+		dict[lod_p + "_buffer_changed"] = ldiag.instance_buffer_changed;
+		dict[lod_p + "_bytes_uploaded"] = static_cast<int64_t>(ldiag.instance_bytes_uploaded);
+	}
+
 
 	dict["live_camera_x_m"] = current_cam_state.presentation_x_m;
 	dict["live_camera_y_m"] = current_cam_state.canonical_position.altitude_m;
