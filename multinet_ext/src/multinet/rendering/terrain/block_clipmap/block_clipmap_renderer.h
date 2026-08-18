@@ -550,6 +550,7 @@ private:
 	bool chp_debug_negative_height_color{ false };
 	bool chp_debug_negative_height_exaggeration{ false };
 	int bccm_debug_visual_mode{ 0 };
+	bool is_visible_{ true };
 	Multinet::TerrainFallbackBounds fallback_bounds{};
 	Multinet::WorldDomainManifest active_domain{};
 
@@ -905,6 +906,9 @@ public:
 
 	int get_bccm_debug_visual_mode() const noexcept { return bccm_debug_visual_mode; }
 	void set_bccm_debug_visual_mode(int mode) noexcept;
+
+	bool is_visible() const noexcept { return is_visible_; }
+	void set_visible(bool visible) noexcept;
 
 	bool get_high_speed_cut_diagnostics_enabled() const noexcept { return high_speed_cut_diagnostics_enabled_; }
 	void set_high_speed_cut_diagnostics_enabled(bool enabled) noexcept {

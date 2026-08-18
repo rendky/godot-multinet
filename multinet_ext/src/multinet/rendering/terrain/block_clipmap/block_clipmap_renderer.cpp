@@ -500,6 +500,7 @@ bool BlockClipmapRenderer::initialize(
 		if (!level.instance_rid.is_valid()) { cleanup(); return false; }
 		rs->instance_set_base(level.instance_rid, level.multimesh_rid);
 		rs->instance_set_scenario(level.instance_rid, scenario_rid);
+		rs->instance_set_visible(level.instance_rid, is_visible_);
 		rs->instance_set_ignore_culling(level.instance_rid, true);
 		rs->instance_geometry_set_cast_shadows_setting(
 			level.instance_rid,
@@ -724,6 +725,22 @@ void BlockClipmapRenderer::set_bccm_debug_visual_mode(int mode) noexcept {
 #endif
 }
 
+void BlockClipmapRenderer::set_visible(bool visible) noexcept {
+	is_visible_ = visible;
+#ifndef MULTINET_TEST
+	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
+	if (!rs) return;
+	for (auto& lvl : levels) {
+		if (lvl.instance_rid.is_valid()) {
+			rs->instance_set_visible(lvl.instance_rid, visible);
+		}
+	}
+	if (frozen_frustum_instance_rid_.is_valid()) {
+		rs->instance_set_visible(frozen_frustum_instance_rid_, visible);
+	}
+#endif
+}
+
 void BlockClipmapRenderer::update_frozen_view_presentation_delta(
 	const godot::Vector3& p_camera_delta,
 	const multinet::rendering::chp::CurvedHorizonView* chp_view,
@@ -905,6 +922,7 @@ void BlockClipmapRenderer::set_frozen_frustum_visualization(
 	rs->instance_set_scenario(frozen_frustum_instance_rid_, scenario_rid);
 	frozen_frustum_transform_ = godot::Transform3D();
 	rs->instance_set_transform(frozen_frustum_instance_rid_, frozen_frustum_transform_);
+	rs->instance_set_visible(frozen_frustum_instance_rid_, is_visible_);
 	has_frozen_frustum_ = true;
 #else
 	has_frozen_frustum_ = true;

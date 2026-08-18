@@ -1025,6 +1025,9 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 		init_rendering();
 		set_process(true);
 
+	} else if (p_what == NOTIFICATION_VISIBILITY_CHANGED) {
+		bccm_renderer.set_visible(is_visible_in_tree());
+
 	} else if (p_what == NOTIFICATION_PROCESS) {
 #ifdef DEBUG_ENABLED
 		if (!get_global_transform().is_equal_approx(godot::Transform3D())) {
@@ -1054,7 +1057,8 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 				if (!configure_bccm_profile() || !bccm_renderer.initialize(rs, get_world_3d()->get_scenario(), world_domain_manifest, recipe.identity, fb)) {
 					std::cerr << "[MultinetBCCMNode3D] Renderer initialization failed (process)." << std::endl;
 				} else {
-		bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
+					bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
+					bccm_renderer.set_visible(is_visible_in_tree());
 				}
 			}
 
@@ -1153,6 +1157,7 @@ void MultinetBCCMNode3D::_notification(int p_what) {
 						std::cerr << "[MultinetBCCMNode3D] Renderer initialization failed." << std::endl;
 					} else {
 						bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
+						bccm_renderer.set_visible(is_visible_in_tree());
 					}
 				}
 
@@ -1197,6 +1202,7 @@ void MultinetBCCMNode3D::init_rendering() {
 			std::cerr << "[MultinetBCCMNode3D] Renderer initialization failed (init_rendering)." << std::endl;
 		} else {
 			bccm_renderer.bind_material_uniforms(recipe, world_domain_manifest);
+			bccm_renderer.set_visible(is_visible_in_tree());
 		}
 	}
 	refresh_chp_contract();
