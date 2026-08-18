@@ -611,6 +611,7 @@ void BlockClipmapRenderer::bind_material_uniforms(
 		rs->material_set_param(mat, "chp_debug_negative_height_color", chp_debug_negative_height_color);
 		rs->material_set_param(mat, "chp_debug_negative_height_exaggeration", chp_debug_negative_height_exaggeration);
 		rs->material_set_param(mat, "bccm_debug_visual_mode", bccm_debug_visual_mode);
+		rs->material_set_param(mat, "bccm_performance_probe_mode", bccm_performance_probe_mode);
 
 		const TerrainRootLatticeAnchors initial_anchors = compute_root_anchors(Multinet::FramePosition64{ 1.0, 0.0, 0.0 }, scale.logical_area_radius_m, recipe);
 		rs->material_set_param(mat, "terrain_root_cell_0", godot::Vector3i(initial_anchors.cell[0][0], initial_anchors.cell[0][1], initial_anchors.cell[0][2]));
@@ -681,6 +682,7 @@ void BlockClipmapRenderer::bind_material_uniforms(
 		rs->material_set_param(mat, "chp_debug_negative_height_color", chp_debug_negative_height_color);
 		rs->material_set_param(mat, "chp_debug_negative_height_exaggeration", chp_debug_negative_height_exaggeration);
 		rs->material_set_param(mat, "bccm_debug_visual_mode", bccm_debug_visual_mode);
+		rs->material_set_param(mat, "bccm_performance_probe_mode", bccm_performance_probe_mode);
 	}
 #endif
 }
@@ -720,6 +722,20 @@ void BlockClipmapRenderer::set_bccm_debug_visual_mode(int mode) noexcept {
 		godot::RID mat = levels[lod].material_rid;
 		if (mat.is_valid()) {
 			rs->material_set_param(mat, "bccm_debug_visual_mode", mode);
+		}
+	}
+#endif
+}
+
+void BlockClipmapRenderer::set_bccm_performance_probe_mode(int mode) noexcept {
+	bccm_performance_probe_mode = mode;
+#ifndef MULTINET_TEST
+	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
+	if (!rs) return;
+	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+		godot::RID mat = levels[lod].material_rid;
+		if (mat.is_valid()) {
+			rs->material_set_param(mat, "bccm_performance_probe_mode", mode);
 		}
 	}
 #endif
@@ -2568,6 +2584,7 @@ void BlockClipmapRenderer::update_with_view(
 			rs->material_set_param(material, "chp_debug_negative_height_exaggeration", chp_debug_negative_height_exaggeration);
 		}
 		rs->material_set_param(material, "bccm_debug_visual_mode", bccm_debug_visual_mode);
+		rs->material_set_param(material, "bccm_performance_probe_mode", bccm_performance_probe_mode);
 	}
 
 	TerrainUpdateResult result = compute_update(p_camera_world_position, p_frustum, scale, cam_state, expectation, terrain_source, chp_view, delta_seconds);

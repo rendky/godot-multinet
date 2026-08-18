@@ -284,6 +284,10 @@ void MultinetBCCMNode3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_bccm_debug_visual_mode"), &MultinetBCCMNode3D::get_bccm_debug_visual_mode);
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "bccm_debug_visual_mode"), "set_bccm_debug_visual_mode", "get_bccm_debug_visual_mode");
 
+	ClassDB::bind_method(D_METHOD("set_bccm_performance_probe_mode", "mode"), &MultinetBCCMNode3D::set_bccm_performance_probe_mode);
+	ClassDB::bind_method(D_METHOD("get_bccm_performance_probe_mode"), &MultinetBCCMNode3D::get_bccm_performance_probe_mode);
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "bccm_performance_probe_mode", PROPERTY_HINT_ENUM, "Full,FullPosition_ConstantNormal,NoTerrain,MinimalVertex"), "set_bccm_performance_probe_mode", "get_bccm_performance_probe_mode");
+
 
 	ClassDB::bind_method(D_METHOD("set_freeze_update", "freeze"), &MultinetBCCMNode3D::set_freeze_update);
 	ClassDB::bind_method(D_METHOD("get_freeze_update"), &MultinetBCCMNode3D::get_freeze_update);
@@ -1659,6 +1663,14 @@ void MultinetBCCMNode3D::set_bccm_debug_visual_mode(int p_mode) {
 
 int MultinetBCCMNode3D::get_bccm_debug_visual_mode() const {
 	return bccm_renderer.get_bccm_debug_visual_mode();
+}
+
+void MultinetBCCMNode3D::set_bccm_performance_probe_mode(int p_mode) {
+	bccm_renderer.set_bccm_performance_probe_mode(p_mode);
+}
+
+int MultinetBCCMNode3D::get_bccm_performance_probe_mode() const {
+	return bccm_renderer.get_bccm_performance_probe_mode();
 }
 
 void MultinetBCCMNode3D::set_freeze_update(bool p_freeze) {

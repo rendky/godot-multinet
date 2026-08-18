@@ -271,8 +271,17 @@ public:
 	bool get_chp_debug_negative_height_color() const;
 	void set_chp_debug_negative_height_exaggeration(bool p_enabled);
 	bool get_chp_debug_negative_height_exaggeration() const;
+	enum BCCMPerformanceProbeMode {
+		BCCM_PERFORMANCE_PROBE_FULL = 0,
+		BCCM_PERFORMANCE_PROBE_FULL_POSITION_CONSTANT_NORMAL = 1,
+		BCCM_PERFORMANCE_PROBE_NO_TERRAIN = 2,
+		BCCM_PERFORMANCE_PROBE_MINIMAL_VERTEX = 3
+	};
+
 	void set_bccm_debug_visual_mode(int p_mode);
 	int get_bccm_debug_visual_mode() const;
+	void set_bccm_performance_probe_mode(int p_mode);
+	int get_bccm_performance_probe_mode() const;
 
 	// Read-only derived world-domain diagnostics.
 	double get_canonical_area_km2() const;

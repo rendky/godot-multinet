@@ -74,6 +74,7 @@ uniform float chp_certified_max_u = 0.0;
 uniform bool chp_debug_negative_height_color = false;
 uniform bool chp_debug_negative_height_exaggeration = false;
 uniform int bccm_debug_visual_mode = 0; // 0 = default albedo, 1 = normal rgb, 2 = morph mu, 3 = recursion depth
+uniform int bccm_performance_probe_mode = 0; // 0 = Full, 1 = FullPosition_ConstantNormal, 2 = NoTerrain, 3 = MinimalVertex
 
 // Canonical Root-Relative Noise Lattice Anchors (R1.2P Precision)
 uniform ivec3 terrain_root_cell_0 = ivec3(0);
@@ -860,7 +861,8 @@ vec3 sample_bilinear_page_with_derivatives(sampler2DArray pages, vec2 local_coor
 	float dv = mix(h01 - h00, h11 - h10, frac.x) / spacing;
 	return vec3(val, du, dv);
 }
-
+)";
+	code += R"(
 void vertex() {
 	// Decode Dedicated Instance Attributes Contract (Step 2)
 	uint r_bits = uint(round(INSTANCE_CUSTOM.r));
@@ -880,6 +882,20 @@ void vertex() {
 	float coord_u = INSTANCE_CUSTOM.b;
 	float coord_v = INSTANCE_CUSTOM.a;
 
+	// Mode 3: MinimalVertex — minimum legal vertex path (identical blocks/instances/draws, flat Y=0, constant normal, minimal transform)
+	if (bccm_performance_probe_mode == 3) {
+		VERTEX = vec3(VERTEX.x, 0.0, VERTEX.z);
+		NORMAL = vec3(0.0, 1.0, 0.0);
+		canonical_domain_uv_m = vec2(0.0);
+		terrain_face = float((r_bits >> 13u) & 7u);
+		debug_final_y_m = 0.0;
+		debug_morph_mu = 0.0;
+		debug_recursion_depth = 0.0;
+		if (uses_camera_relative_render) {
+			MODELVIEW_MATRIX = mat4(mat3(VIEW_MATRIX)) * MODEL_MATRIX;
+			MODELVIEW_NORMAL_MATRIX = mat3(VIEW_MATRIX) * MODEL_NORMAL_MATRIX;
+		}
+	} else {
 	ivec2 fine_i = ivec2(int(round(VERTEX.x)), int(round(VERTEX.z)));
 	float vx = VERTEX.x;
 	float vz = VERTEX.z;
@@ -1032,78 +1048,101 @@ void vertex() {
 			: vec3(0.0);
 	}
 
-	vec4 logical_height_gradient = uses_logical_analytic_gradient
-		? eval_closed_analytic_height_gradient_lattice(delta_phys)
-		: vec4(0.0);
-	// The analytic gradient already carries the exact centre height. Re-running
-	// all noise octaves here doubled the closed-world vertex cost for no result.
-	float h_center = uses_logical_analytic_gradient
-		? logical_height_gradient.x
-		: eval_instance_analytic_height(
-			face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding,
-			uses_logical_chart, uses_bounded_logical_chart, plane_m);
+	float h_center = 0.0;
+	float analytic_slope_u = 0.0;
+	float analytic_slope_v = 0.0;
 
-	// The logical closed chart has an exact derivative. Its former half-metre
-	// direction probes fall below FP32 angular precision at Earth radius.
-	float h_rt = h_center;
-	float h_lf = h_center;
-	float h_dn = h_center;
-	float h_up = h_center;
-	float analytic_slope_u;
-	float analytic_slope_v;
-	if (uses_logical_analytic_gradient) {
-		vec3 physical_gradient = logical_height_gradient.yzw;
-		analytic_slope_u = dot(
-			physical_gradient, logical_area_radius_m * logical_direction_u);
-		analytic_slope_v = dot(
-			physical_gradient, logical_area_radius_m * logical_direction_v);
-	} else {
-		h_rt = eval_instance_analytic_height(
-			face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
-			plane_m + vec2(analytic_normal_sample_step_m, 0.0));
-		h_lf = eval_instance_analytic_height(
-			face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
-			plane_m - vec2(analytic_normal_sample_step_m, 0.0));
-		h_dn = eval_instance_analytic_height(
-			face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
-			plane_m + vec2(0.0, analytic_normal_sample_step_m));
-		h_up = eval_instance_analytic_height(
-			face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
-			plane_m - vec2(0.0, analytic_normal_sample_step_m));
-		analytic_slope_u = world_domain_topology == 0u
-			? finite_axis_slope(h_center, h_rt, h_lf, u_m, finite_half_extent_x_m, analytic_normal_sample_step_m)
-			: (h_rt - h_lf) / (2.0 * analytic_normal_sample_step_m);
-		analytic_slope_v = world_domain_topology == 0u
-			? finite_axis_slope(h_center, h_dn, h_up, v_m, finite_half_extent_z_m, analytic_normal_sample_step_m)
-			: (h_dn - h_up) / (2.0 * analytic_normal_sample_step_m);
+	if (bccm_performance_probe_mode != 2) {
+		if (bccm_performance_probe_mode == 1) {
+			// Mode 1: FullPosition_ConstantNormal — scalar height only, bypass all gradient and directional probes
+			h_center = uses_logical_analytic_gradient
+				? eval_closed_analytic_height_lattice(delta_phys)
+				: eval_instance_analytic_height(
+					face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding,
+					uses_logical_chart, uses_bounded_logical_chart, plane_m);
+		} else {
+			// Mode 0: Full production path (scalar height + exact gradients / directional probes)
+			vec4 logical_height_gradient = uses_logical_analytic_gradient
+				? eval_closed_analytic_height_gradient_lattice(delta_phys)
+				: vec4(0.0);
+			h_center = uses_logical_analytic_gradient
+				? logical_height_gradient.x
+				: eval_instance_analytic_height(
+					face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding,
+					uses_logical_chart, uses_bounded_logical_chart, plane_m);
+
+			if (uses_logical_analytic_gradient) {
+				vec3 physical_gradient = logical_height_gradient.yzw;
+				analytic_slope_u = dot(
+					physical_gradient, logical_area_radius_m * logical_direction_u);
+				analytic_slope_v = dot(
+					physical_gradient, logical_area_radius_m * logical_direction_v);
+			} else {
+				float h_rt = eval_instance_analytic_height(
+					face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
+					plane_m + vec2(analytic_normal_sample_step_m, 0.0));
+				float h_lf = eval_instance_analytic_height(
+					face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
+					plane_m - vec2(analytic_normal_sample_step_m, 0.0));
+				float h_dn = eval_instance_analytic_height(
+					face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
+					plane_m + vec2(0.0, analytic_normal_sample_step_m));
+				float h_up = eval_instance_analytic_height(
+					face, coord_u, coord_v, patch_orientation, uses_sample_patch, uses_coherent_unfolding, uses_logical_chart, uses_bounded_logical_chart,
+					plane_m - vec2(0.0, analytic_normal_sample_step_m));
+				analytic_slope_u = world_domain_topology == 0u
+					? finite_axis_slope(h_center, h_rt, h_lf, u_m, finite_half_extent_x_m, analytic_normal_sample_step_m)
+					: (h_rt - h_lf) / (2.0 * analytic_normal_sample_step_m);
+				analytic_slope_v = world_domain_topology == 0u
+					? finite_axis_slope(h_center, h_dn, h_up, v_m, finite_half_extent_z_m, analytic_normal_sample_step_m)
+					: (h_dn - h_up) / (2.0 * analytic_normal_sample_step_m);
+			}
+		}
 	}
 
 	float final_y = h_center;
 	float final_slope_u = analytic_slope_u;
 	float final_slope_v = analytic_slope_v;
 
-	if (source_mode == 1u) {
-		// AbsoluteHeightPageDebug mode: single-fetch bilinear height and analytic derivatives
+	if (bccm_performance_probe_mode == 2) {
+		// Mode 2: NoTerrain — zero height and zero slopes, bypass page sampling
+		final_y = 0.0;
+		final_slope_u = 0.0;
+		final_slope_v = 0.0;
+	} else if (source_mode == 1u) {
+		// AbsoluteHeightPageDebug mode
 		if (gpu_layer > 0u) {
-			vec3 page_sample = sample_bilinear_page_with_derivatives(height_pages, vec2(vx, vz), gpu_layer, lod_spacing);
-			final_y = page_sample.x;
-			final_slope_u = page_sample.y;
-			final_slope_v = page_sample.z;
+			if (bccm_performance_probe_mode == 1) {
+				final_y = sample_bilinear_page(height_pages, vec2(vx, vz), gpu_layer);
+				final_slope_u = 0.0;
+				final_slope_v = 0.0;
+			} else {
+				vec3 page_sample = sample_bilinear_page_with_derivatives(height_pages, vec2(vx, vz), gpu_layer, lod_spacing);
+				final_y = page_sample.x;
+				final_slope_u = page_sample.y;
+				final_slope_v = page_sample.z;
+			}
 		} else {
 			final_y = h_center;
 		}
 	} else if (source_mode == 2u) {
-		// HybridAdditiveDelta mode: analytic base + single-fetch additive delta derivatives
+		// HybridAdditiveDelta mode
 		if (gpu_layer > 0u) {
-			vec3 delta_sample = sample_bilinear_page_with_derivatives(height_pages, vec2(vx, vz), gpu_layer, lod_spacing);
-			final_y = h_center + delta_sample.x;
-			final_slope_u += delta_sample.y;
-			final_slope_v += delta_sample.z;
+			if (bccm_performance_probe_mode == 1) {
+				final_y = h_center + sample_bilinear_page(height_pages, vec2(vx, vz), gpu_layer);
+				final_slope_u = 0.0;
+				final_slope_v = 0.0;
+			} else {
+				vec3 delta_sample = sample_bilinear_page_with_derivatives(height_pages, vec2(vx, vz), gpu_layer, lod_spacing);
+				final_y = h_center + delta_sample.x;
+				final_slope_u += delta_sample.y;
+				final_slope_v += delta_sample.z;
+			}
 		} else {
 			final_y = h_center;
 		}
 	} else {
-		// AnalyticBase mode (Production): immediate canonical analytic height and slopes
+		// AnalyticBase mode (Production)
 		final_y = h_center;
 	}
 	VERTEX.y = final_y;
@@ -1121,7 +1160,9 @@ void vertex() {
 	float by2 = dot(by, by);
 	float bz2 = dot(bz, bz);
 
-	vec3 target_normal_cam = normalize(vec3(-final_slope_u, 1.0, -final_slope_v));
+	vec3 target_normal_cam = (bccm_performance_probe_mode >= 1)
+		? vec3(0.0, 1.0, 0.0)
+		: normalize(vec3(-final_slope_u, 1.0, -final_slope_v));
 
 	if (chp_gpu_effective && uses_camera_relative_render && chp_debug_reconstruction_mode > 0) {
 		vec3 flat_model = vec3(VERTEX.x, presented_final_y, VERTEX.z);
@@ -1135,7 +1176,9 @@ void vertex() {
 			// Mode 2: CHP curved position and composed curved normal
 			vec2 q = flat_camera_relative.xz;
 			target_camera_relative = eval_chp_curved_surface_position(q, presented_final_y) - vec3(0.0, chp_camera_altitude_m, 0.0);
-			target_normal_cam = eval_chp_curved_surface_normal(q, presented_final_y, final_slope_u, final_slope_v);
+			if (bccm_performance_probe_mode == 0) {
+				target_normal_cam = eval_chp_curved_surface_normal(q, presented_final_y, final_slope_u, final_slope_v);
+			}
 		}
 
 		// Exact inverse reconstruction for orthogonal scaled model basis
@@ -1158,7 +1201,9 @@ void vertex() {
 			dot(bz, target_normal_cam)
 		));
 	} else {
-		NORMAL = normalize(vec3(-final_slope_u * lod_spacing, 1.0, -final_slope_v * lod_spacing));
+		NORMAL = (bccm_performance_probe_mode >= 1)
+			? vec3(0.0, 1.0, 0.0)
+			: normalize(vec3(-final_slope_u * lod_spacing, 1.0, -final_slope_v * lod_spacing));
 	}
 
 	if (uses_camera_relative_render) {
@@ -1168,8 +1213,10 @@ void vertex() {
 		MODELVIEW_MATRIX = mat4(mat3(VIEW_MATRIX)) * MODEL_MATRIX;
 		MODELVIEW_NORMAL_MATRIX = mat3(VIEW_MATRIX) * MODEL_NORMAL_MATRIX;
 	}
+	}
 }
-
+)";
+	code += R"(
 void fragment() {
 	if (world_domain_topology == 0u && (abs(canonical_domain_uv_m.x) > finite_half_extent_x_m || abs(canonical_domain_uv_m.y) > finite_half_extent_z_m)) {
 		discard;
