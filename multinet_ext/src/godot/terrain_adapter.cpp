@@ -286,7 +286,11 @@ void MultinetBCCMNode3D::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("set_bccm_performance_probe_mode", "mode"), &MultinetBCCMNode3D::set_bccm_performance_probe_mode);
 	ClassDB::bind_method(D_METHOD("get_bccm_performance_probe_mode"), &MultinetBCCMNode3D::get_bccm_performance_probe_mode);
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "bccm_performance_probe_mode", PROPERTY_HINT_ENUM, "Full,FullPosition_ConstantNormal,NoTerrain,MinimalVertex"), "set_bccm_performance_probe_mode", "get_bccm_performance_probe_mode");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "bccm_performance_probe_mode", PROPERTY_HINT_ENUM, "Full,FullPosition_ConstantNormal,NoTerrain,MinimalVertex,MinimalVertex_Unshaded"), "set_bccm_performance_probe_mode", "get_bccm_performance_probe_mode");
+
+	ClassDB::bind_method(D_METHOD("set_chp_curved_frustum_culling_enabled", "enabled"), &MultinetBCCMNode3D::set_chp_curved_frustum_culling_enabled);
+	ClassDB::bind_method(D_METHOD("get_chp_curved_frustum_culling_enabled"), &MultinetBCCMNode3D::get_chp_curved_frustum_culling_enabled);
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "chp_curved_frustum_culling_enabled"), "set_chp_curved_frustum_culling_enabled", "get_chp_curved_frustum_culling_enabled");
 
 
 	ClassDB::bind_method(D_METHOD("set_freeze_update", "freeze"), &MultinetBCCMNode3D::set_freeze_update);
@@ -1673,6 +1677,14 @@ int MultinetBCCMNode3D::get_bccm_performance_probe_mode() const {
 	return bccm_renderer.get_bccm_performance_probe_mode();
 }
 
+void MultinetBCCMNode3D::set_chp_curved_frustum_culling_enabled(bool p_enabled) {
+	bccm_renderer.set_chp_curved_frustum_culling_enabled(p_enabled);
+}
+
+bool MultinetBCCMNode3D::get_chp_curved_frustum_culling_enabled() const {
+	return bccm_renderer.get_chp_curved_frustum_culling_enabled();
+}
+
 void MultinetBCCMNode3D::set_freeze_update(bool p_freeze) {
 	if (p_freeze && !freeze_update) {
 		frozen_bccm_frame = current_cam_state.frame_epoch;
@@ -1858,6 +1870,25 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["closed_placement_failures"] = streaming.closed_placement_failures;
 	dict["canonical_duplicate_presentations_retained"] = streaming.canonical_duplicate_presentations_retained;
 	dict["maximum_patch_transition_count"] = streaming.maximum_patch_transition_count;
+	dict["enumerated_candidates"] = streaming.enumerated_candidates;
+	dict["exact_frustum_visible_candidates"] = streaming.exact_frustum_visible_candidates;
+	dict["exact_frustum_culled_candidates"] = streaming.exact_frustum_culled_candidates;
+	dict["frustum_visible_candidates"] = streaming.frustum_visible_candidates;
+	dict["frustum_culled_candidates"] = streaming.frustum_culled_candidates;
+	dict["guard_visible_candidates"] = streaming.guard_visible_candidates;
+	dict["resident_visible_candidates"] = streaming.resident_visible_candidates;
+	dict["resident_guard_only_candidates"] = streaming.resident_guard_only_candidates;
+	dict["resident_lease_only_candidates"] = streaming.resident_lease_only_candidates;
+	dict["residency_entries_added"] = streaming.residency_entries_added;
+	dict["residency_entries_evicted"] = streaming.residency_entries_evicted;
+	dict["eviction_eligible_but_deferred"] = streaming.eviction_eligible_but_deferred;
+	dict["multimesh_buffers_rewritten"] = streaming.multimesh_buffers_rewritten;
+	dict["total_instance_bytes_uploaded"] = static_cast<int64_t>(streaming.total_instance_bytes_uploaded);
+	dict["chp_curved_bounds_candidates"] = streaming.chp_curved_bounds_candidates;
+	dict["chp_curved_bounds_fallback_visible"] = streaming.chp_curved_bounds_fallback_visible;
+	dict["chp_out_of_certified_envelope_candidates"] = streaming.chp_out_of_certified_envelope_candidates;
+	dict["chp_bounds_failure_candidates"] = streaming.chp_bounds_failure_candidates;
+	dict["chp_curved_frustum_culling_enabled"] = bccm_renderer.get_chp_curved_frustum_culling_enabled();
 #ifdef DEBUG_ENABLED
 	dict["editor_observer_valid"] = editor_observer_state.valid;
 	dict["editor_observer_face"] = static_cast<int>(editor_observer_state.canonical_position.face);

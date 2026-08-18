@@ -1,5 +1,6 @@
 #include "multinet/rendering/terrain/block_clipmap/block_clipmap_renderer.h"
 #include "multinet/rendering/terrain/block_clipmap/terrain_sample_patch.h"
+#include "multinet/rendering/chp/chp_bounds.h"
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/image.hpp>
@@ -453,6 +454,7 @@ bool BlockClipmapRenderer::initialize(
 		cleanup();
 		return false;
 	}
+	unshaded_shader_data = create_bccm_unshaded_shader_material();
 
 	rs->mesh_surface_set_material(master_mesh_rid, 0, shader_data.material_rid);
 	rs->mesh_surface_set_material(legacy_mesh_rid, 0, shader_data.material_rid);
@@ -728,14 +730,41 @@ void BlockClipmapRenderer::set_bccm_debug_visual_mode(int mode) noexcept {
 }
 
 void BlockClipmapRenderer::set_bccm_performance_probe_mode(int mode) noexcept {
+	if (bccm_performance_probe_mode == mode) return;
+	const int old_mode = bccm_performance_probe_mode;
 	bccm_performance_probe_mode = mode;
 #ifndef MULTINET_TEST
 	godot::RenderingServer* rs = godot::RenderingServer::get_singleton();
 	if (!rs) return;
-	for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
-		godot::RID mat = levels[lod].material_rid;
-		if (mat.is_valid()) {
-			rs->material_set_param(mat, "bccm_performance_probe_mode", mode);
+	if (mode == 4 && old_mode != 4) {
+		// Switch to unshaded diagnostic shader variant across all LOD level materials
+		for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+			godot::RID mat = levels[lod].material_rid;
+			if (mat.is_valid() && unshaded_shader_data.shader_rid.is_valid()) {
+				rs->material_set_shader(mat, unshaded_shader_data.shader_rid);
+			}
+		}
+	} else if (mode != 4 && old_mode == 4) {
+		// Restore production shader across all LOD level materials
+		const bool is_certified_profile = (profile.candidate_grid_radius == 4 && profile.inner_hole_radius == 2);
+		for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+			godot::RID mat = levels[lod].material_rid;
+			if (mat.is_valid() && shader_data.shader_rid.is_valid()) {
+				rs->material_set_shader(mat, shader_data.shader_rid);
+				rs->material_set_param(mat, "height_pages", levels[lod].texture_array_rid);
+				rs->material_set_param(mat, "parent_morph_enabled", is_certified_profile);
+				rs->material_set_param(mat, "current_lod_index", static_cast<uint32_t>(lod));
+				rs->material_set_param(mat, "active_ordinary_level_count", static_cast<uint32_t>(profile.level_count));
+				rs->material_set_param(mat, "bccm_performance_probe_mode", mode);
+				rs->material_set_param(mat, "bccm_debug_visual_mode", bccm_debug_visual_mode);
+			}
+		}
+	} else if (mode != 4) {
+		for (uint8_t lod = 0; lod < profile.level_count; ++lod) {
+			godot::RID mat = levels[lod].material_rid;
+			if (mat.is_valid()) {
+				rs->material_set_param(mat, "bccm_performance_probe_mode", mode);
+			}
 		}
 	}
 #endif
@@ -1066,6 +1095,14 @@ void BlockClipmapRenderer::cleanup() {
 		rs->free_rid(shader_data.shader_rid);
 		shader_data.shader_rid = godot::RID();
 	}
+	if (unshaded_shader_data.material_rid.is_valid()) {
+		rs->free_rid(unshaded_shader_data.material_rid);
+		unshaded_shader_data.material_rid = godot::RID();
+	}
+	if (unshaded_shader_data.shader_rid.is_valid()) {
+		rs->free_rid(unshaded_shader_data.shader_rid);
+		unshaded_shader_data.shader_rid = godot::RID();
+	}
 	if (has_v5_chart_global_lease_) {
 		release_v5_chart_globals(rs);
 		has_v5_chart_global_lease_ = false;
@@ -1075,6 +1112,7 @@ void BlockClipmapRenderer::cleanup() {
 	active_domain = Multinet::WorldDomainManifest{};
 	profile.level_count = 8;
 	has_active_presentation_binding = false;
+	clear_visibility_residency();
 
 #ifndef MULTINET_TEST
 	active_presentation_basis = godot::Basis();
@@ -1086,6 +1124,13 @@ void BlockClipmapRenderer::cleanup() {
 	bound_logical_chart_root_presentation_x_m_ = 0.0;
 	bound_logical_chart_root_presentation_z_m_ = 0.0;
 	has_bound_logical_chart_root_ = false;
+}
+
+void BlockClipmapRenderer::clear_visibility_residency() noexcept {
+	for (auto& lvl : levels) {
+		lvl.residency_leases.fill(LODLevelData::BlockVisibilityLease{});
+		lvl.residency_lease_count = 0;
+	}
 }
 
 struct FrameDemandEntry {
@@ -1271,6 +1316,15 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 		active_cam_v = cam_state.presentation_z_m;
 	}
 
+	if (closed_presentation && cam_state.unfolding_generation != last_unfolding_generation_) {
+		clear_visibility_residency();
+		last_unfolding_generation_ = cam_state.unfolding_generation;
+	}
+	if (cam_state.active_frame.origin.face != last_camera_face_) {
+		clear_visibility_residency();
+		last_camera_face_ = cam_state.active_frame.origin.face;
+	}
+
 	// Reset submission plan and diagnostic metrics
 	last_submission_plan.valid = true;
 	for (auto& lod : last_submission_plan.lods) {
@@ -1328,6 +1382,8 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 		godot::Vector3 local_origin;
 		godot::AABB local_aabb;
 		bool is_visible{ false };
+		bool exact_visible{ false };
+		bool guard_visible{ false };
 		int64_t dist_sq_m{ 0 };
 		uint8_t lod{ 0 };
 		uint8_t raw_edge_mask{ 0 };
@@ -1486,7 +1542,9 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 		}
 
 		std::sort(offsets.begin(), offsets.begin() + offset_count, [](const CandOffset& a, const CandOffset& b) {
-			return a.dist_sq < b.dist_sq;
+			if (a.dist_sq != b.dist_sq) return a.dist_sq < b.dist_sq;
+			if (a.du != b.du) return a.du < b.du;
+			return a.dv < b.dv;
 		});
 
 		for (uint32_t off_i = 0; off_i < offset_count; ++off_i) {
@@ -1528,9 +1586,320 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 			}
 			if (dup) continue;
 
+			Multinet::TerrainFallbackBounds stale_bounds{};
+			stale_bounds.minimum_height = 1e9f;
+			stale_bounds.maximum_height = -1e9f;
+			bool found_stale = false;
+
+			for (uint32_t j = 1; j < 128; ++j) {
+				const auto& slot = levels[lod].slots[j];
+				if ((slot.state == TerrainGpuPageState::Resident || slot.state == TerrainGpuPageState::UploadPending) &&
+				    slot.key == key &&
+				    slot.sample_patch == sample_patch)
+				{
+					stale_bounds.minimum_height = std::min(stale_bounds.minimum_height, slot.minimum_sample_m);
+					stale_bounds.maximum_height = std::max(stale_bounds.maximum_height, slot.maximum_sample_m);
+					found_stale = true;
+				}
+			}
+
+			BlockPlacement place = closed_presentation
+				? build_presentation_block_placement(
+					presentation_key, key, active_cam_u, active_cam_v, fb,
+					&publication.committed_delta, found_stale ? &stale_bounds : nullptr)
+				: build_block_placement(key, cam_state.active_frame, scale, fb, &publication.committed_delta, found_stale ? &stale_bounds : nullptr);
+			if (!place.valid) {
+				if (closed_presentation) ++last_streaming_diagnostics.closed_placement_failures;
+				continue;
+			}
+
+			++last_streaming_diagnostics.enumerated_candidates;
+
+			godot::AABB flat_camera_relative_aabb = godot::Transform3D(
+				place.block_to_active_frame, godot::Vector3(0, 0, 0)
+			).xform(place.local_aabb);
+			flat_camera_relative_aabb.position += place.local_origin;
+
+			godot::AABB flat_world_aabb = flat_camera_relative_aabb;
+			if (has_active_presentation_binding) {
+				flat_world_aabb.position += active_view_world_position;
+			}
+
+			bool exact_visible = true;
+			bool guard_visible = true;
+			if (!chp_view || !chp_view->chp_effective || !has_active_presentation_binding) {
+				// Section 12: CHP-OFF flat culling identity
+				exact_visible = frustum.intersects_aabb(flat_world_aabb);
+				guard_visible = exact_visible;
+			} else if (!chp_curved_frustum_culling_enabled_ || chp_debug_negative_height_exaggeration) {
+				// Section 14 & 19: R1 conservative debug bypass (when disabled or under debug exaggeration)
+				exact_visible = true;
+				guard_visible = true;
+				++last_streaming_diagnostics.chp_curved_bounds_fallback_visible;
+			} else {
+				// Section 5-10, 13: R3 Conservative Curved Frustum Culling
+				++last_streaming_diagnostics.chp_curved_bounds_candidates;
+				const double flat_min_x = static_cast<double>(flat_camera_relative_aabb.position.x);
+				const double flat_max_x = flat_min_x + static_cast<double>(flat_camera_relative_aabb.size.x);
+				const double flat_min_z = static_cast<double>(flat_camera_relative_aabb.position.z);
+				const double flat_max_z = flat_min_z + static_cast<double>(flat_camera_relative_aabb.size.z);
+
+				// Section 4: Conservative local terrain height interval
+				const double height_min = static_cast<double>(place.local_aabb.position.y);
+				const double height_max = height_min + static_cast<double>(place.local_aabb.size.y);
+
+				multinet::rendering::chp::CHPCurvedCoverageBounds curved_bounds;
+				if (multinet::rendering::chp::try_build_conservative_curved_bounds(
+					*chp_view,
+					flat_min_x, flat_max_x,
+					flat_min_z, flat_max_z,
+					height_min, height_max,
+					curved_bounds) && curved_bounds.valid)
+				{
+					// Convert curved camera-relative AABB to Godot world space by adding active_view_world_position exactly once
+					const godot::AABB curved_world_aabb(
+						godot::Vector3(
+							static_cast<float>(curved_bounds.minimum_x_m),
+							static_cast<float>(curved_bounds.minimum_y_m),
+							static_cast<float>(curved_bounds.minimum_z_m)
+						) + active_view_world_position,
+						godot::Vector3(
+							static_cast<float>(curved_bounds.maximum_x_m - curved_bounds.minimum_x_m),
+							static_cast<float>(curved_bounds.maximum_y_m - curved_bounds.minimum_y_m),
+							static_cast<float>(curved_bounds.maximum_z_m - curved_bounds.minimum_z_m)
+						)
+					);
+					exact_visible = frustum.intersects_aabb(curved_world_aabb);
+
+					// R3.1 Section 3: Guard AABB expanded by 0.5 * block_size_m on all 3 axes
+					const float guard_pad_m = 0.5f * static_cast<float>(profile.get_lod_block_size(lod));
+					const godot::AABB guard_world_aabb = curved_world_aabb.grow(guard_pad_m);
+					guard_visible = frustum.intersects_aabb(guard_world_aabb);
+					// Invariant: exact_visible implies guard_visible
+					if (exact_visible) {
+						guard_visible = true;
+					}
+				} else {
+					// Fallback: out of certified envelope or failure -> conservative inclusion
+					exact_visible = true;
+					guard_visible = true;
+					++last_streaming_diagnostics.chp_curved_bounds_fallback_visible;
+					const double rad2 = std::max(flat_min_x * flat_min_x, flat_max_x * flat_max_x) +
+					                    std::max(flat_min_z * flat_min_z, flat_max_z * flat_max_z);
+					const double cert_r = chp_view->profile.certified_maximum_deformation_distance_m;
+					if (rad2 > cert_r * cert_r) {
+						++last_streaming_diagnostics.chp_out_of_certified_envelope_candidates;
+					} else {
+						++last_streaming_diagnostics.chp_bounds_failure_candidates;
+					}
+				}
+			}
+
+			uint8_t edge_mask = 0;
+			if (du == r - 1) edge_mask |= 1;
+			if (du == -r)    edge_mask |= 2;
+			if (dv == r - 1) edge_mask |= 4;
+			if (dv == -r)    edge_mask |= 8;
+
+			GlobalCandInfo cand;
+			cand.key = key;
+			cand.presentation_key = presentation_key;
+			cand.sample_patch = sample_patch;
+			cand.block_to_active_frame = place.block_to_active_frame;
+			cand.local_origin = place.local_origin;
+			cand.local_aabb = place.local_aabb;
+			cand.exact_visible = exact_visible;
+			cand.guard_visible = guard_visible;
+			cand.is_visible = false;
+			cand.dist_sq_m = static_cast<int64_t>(offsets[off_i].dist_sq * block_size * block_size);
+			cand.lod = lod;
+			cand.raw_edge_mask = edge_mask;
+
+			if (lod_candidate_counts[lod] < BlockClipmapProfile::MAX_CANDIDATES) {
+				lod_candidates[lod][lod_candidate_counts[lod]++] = cand;
+			} else {
+				last_streaming_diagnostics.wanted_set_overflow = true;
+			}
+		}
+
+		// R3.1 Visibility Residency & Temporal Coherence Pass
+		const uint32_t lod_cand_count = lod_candidate_counts[lod];
+		const bool r3_residency_active = (chp_view && chp_view->chp_effective && has_active_presentation_binding &&
+		                                  chp_curved_frustum_culling_enabled_ && !chp_debug_negative_height_exaggeration);
+
+		if (!r3_residency_active) {
+			// When R3 curved culling is not active (CHP-OFF or debug bypass):
+			for (uint32_t c_idx = 0; c_idx < lod_cand_count; ++c_idx) {
+				auto& cand = lod_candidates[lod][c_idx];
+				cand.is_visible = cand.exact_visible;
+				if (cand.exact_visible) {
+					++last_streaming_diagnostics.exact_frustum_visible_candidates;
+				} else {
+					++last_streaming_diagnostics.exact_frustum_culled_candidates;
+				}
+				if (cand.is_visible) {
+					++last_streaming_diagnostics.resident_visible_candidates;
+				}
+			}
+		} else {
+			// R3.1 Temporal Residency Logic
+			LODLevelData& level = levels[lod];
+			std::array<int32_t, BlockClipmapProfile::MAX_CANDIDATES> cand_lease_indices;
+			cand_lease_indices.fill(-1);
+
+			// Step 1: Match current candidates against existing residency leases
+			for (uint32_t c_idx = 0; c_idx < lod_cand_count; ++c_idx) {
+				const auto& cand = lod_candidates[lod][c_idx];
+				for (uint32_t l_idx = 0; l_idx < level.residency_lease_count; ++l_idx) {
+					const auto& lease = level.residency_leases[l_idx];
+					bool match = closed_presentation
+						? (cand.presentation_key == lease.presentation_key && cand.sample_patch == lease.sample_patch)
+						: (cand.key == lease.render_key);
+					if (match) {
+						cand_lease_indices[c_idx] = static_cast<int32_t>(l_idx);
+						break;
+					}
+				}
+			}
+
+			// Step 2: Update leases and identify eviction-eligible candidates
+			struct EvictionCandidate {
+				uint32_t cand_index;
+				int32_t lease_index;
+				int64_t dist_sq_m;
+				TerrainRenderBlockKey key;
+			};
+			std::array<EvictionCandidate, BlockClipmapProfile::MAX_CANDIDATES> eviction_candidates{};
+			uint32_t eviction_count = 0;
+
+			for (uint32_t c_idx = 0; c_idx < lod_cand_count; ++c_idx) {
+				auto& cand = lod_candidates[lod][c_idx];
+				const int32_t l_idx = cand_lease_indices[c_idx];
+
+				if (cand.exact_visible) {
+					++last_streaming_diagnostics.exact_frustum_visible_candidates;
+				} else {
+					++last_streaming_diagnostics.exact_frustum_culled_candidates;
+				}
+				if (cand.guard_visible) {
+					++last_streaming_diagnostics.guard_visible_candidates;
+				}
+
+				if (cand.guard_visible) {
+					// Guard visible: grant / refresh lease (0.20 seconds)
+					cand.is_visible = true;
+					if (l_idx >= 0) {
+						level.residency_leases[l_idx].lease_remaining_seconds = 0.20;
+						level.residency_leases[l_idx].has_lease = true;
+					} else if (level.residency_lease_count < BlockClipmapProfile::MAX_CANDIDATES) {
+						auto& new_lease = level.residency_leases[level.residency_lease_count++];
+						new_lease.presentation_key = cand.presentation_key;
+						new_lease.render_key = cand.key;
+						new_lease.sample_patch = cand.sample_patch;
+						new_lease.lease_remaining_seconds = 0.20;
+						new_lease.has_lease = true;
+						++last_streaming_diagnostics.residency_entries_added;
+					}
+				} else {
+					// Guard not visible
+					if (l_idx >= 0 && level.residency_leases[l_idx].has_lease) {
+						auto& lease = level.residency_leases[l_idx];
+						lease.lease_remaining_seconds -= delta_seconds;
+						if (lease.lease_remaining_seconds > 0.0) {
+							// Retained under active lease
+							cand.is_visible = true;
+							++last_streaming_diagnostics.resident_lease_only_candidates;
+						} else {
+							// Lease expired: eviction-eligible
+							eviction_candidates[eviction_count++] = { c_idx, l_idx, cand.dist_sq_m, cand.key };
+						}
+					} else {
+						cand.is_visible = false;
+					}
+				}
+			}
+
+			// Step 3: Eviction staggering (at most 2 evictions per LOD per update)
+			constexpr uint32_t MAX_EVICTIONS_PER_LOD_PER_UPDATE = 2;
+			if (eviction_count > MAX_EVICTIONS_PER_LOD_PER_UPDATE) {
+				// Deterministic tie-break for evictions: sort by distance descending, then by key
+				std::sort(eviction_candidates.begin(), eviction_candidates.begin() + eviction_count,
+					[](const EvictionCandidate& a, const EvictionCandidate& b) {
+						if (a.dist_sq_m != b.dist_sq_m) return a.dist_sq_m > b.dist_sq_m; // farthest first
+						if (a.key.face != b.key.face) return a.key.face < b.key.face;
+						if (a.key.block_u != b.key.block_u) return a.key.block_u < b.key.block_u;
+						return a.key.block_v < b.key.block_v;
+					});
+
+				// Evict first 2
+				for (uint32_t i = 0; i < MAX_EVICTIONS_PER_LOD_PER_UPDATE; ++i) {
+					const auto& ev = eviction_candidates[i];
+					lod_candidates[lod][ev.cand_index].is_visible = false;
+					if (ev.lease_index >= 0) {
+						level.residency_leases[ev.lease_index].has_lease = false;
+					}
+					++last_streaming_diagnostics.residency_entries_evicted;
+				}
+				// Defer remaining
+				for (uint32_t i = MAX_EVICTIONS_PER_LOD_PER_UPDATE; i < eviction_count; ++i) {
+					const auto& ev = eviction_candidates[i];
+					lod_candidates[lod][ev.cand_index].is_visible = true; // Conservatively retained
+					if (ev.lease_index >= 0) {
+						level.residency_leases[ev.lease_index].has_lease = true; // Retain lease for next update
+					}
+					++last_streaming_diagnostics.eviction_eligible_but_deferred;
+					++last_streaming_diagnostics.resident_lease_only_candidates;
+				}
+			} else {
+				// Evict all eligible
+				for (uint32_t i = 0; i < eviction_count; ++i) {
+					const auto& ev = eviction_candidates[i];
+					lod_candidates[lod][ev.cand_index].is_visible = false;
+					if (ev.lease_index >= 0) {
+						level.residency_leases[ev.lease_index].has_lease = false;
+					}
+					++last_streaming_diagnostics.residency_entries_evicted;
+				}
+			}
+
+			// Step 4: Enforce Hard Invariant (exact_visible => resident_visible)
+			for (uint32_t c_idx = 0; c_idx < lod_cand_count; ++c_idx) {
+				auto& cand = lod_candidates[lod][c_idx];
+				if (cand.exact_visible) {
+					cand.is_visible = true;
+				}
+				if (cand.is_visible) {
+					++last_streaming_diagnostics.resident_visible_candidates;
+					if (cand.guard_visible && !cand.exact_visible) {
+						++last_streaming_diagnostics.resident_guard_only_candidates;
+					}
+				}
+			}
+
+			// Step 5: Compact residency table
+			uint32_t write_idx = 0;
+			for (uint32_t read_idx = 0; read_idx < level.residency_lease_count; ++read_idx) {
+				if (level.residency_leases[read_idx].has_lease) {
+					if (write_idx != read_idx) {
+						level.residency_leases[write_idx] = level.residency_leases[read_idx];
+					}
+					++write_idx;
+				}
+			}
+			level.residency_lease_count = write_idx;
+		}
+
+		last_streaming_diagnostics.frustum_visible_candidates = last_streaming_diagnostics.exact_frustum_visible_candidates;
+		last_streaming_diagnostics.frustum_culled_candidates = last_streaming_diagnostics.exact_frustum_culled_candidates;
+
+		// Populate unified FrameDemandTable!
+		for (uint32_t c_idx = 0; c_idx < lod_cand_count; ++c_idx) {
+			const auto& cand = lod_candidates[lod][c_idx];
+			if (!cand.is_visible) continue;
+
 			Multinet::TerrainPageRequestContext req_ctx = closed_presentation
-				? Multinet::make_page_request_context(key, sample_patch, profile, publication, scale)
-				: Multinet::make_page_request_context(key, profile, publication, scale);
+				? Multinet::make_page_request_context(cand.key, cand.sample_patch, profile, publication, scale)
+				: Multinet::make_page_request_context(cand.key, profile, publication, scale);
 
 			Multinet::TerrainFallbackBounds stale_bounds{};
 			stale_bounds.minimum_height = 1e9f;
@@ -1555,179 +1924,137 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 
 			BlockPlacement place = closed_presentation
 				? build_presentation_block_placement(
-					presentation_key, key, active_cam_u, active_cam_v, fb,
+					cand.presentation_key, cand.key, active_cam_u, active_cam_v, fb,
 					&publication.committed_delta, found_stale ? &stale_bounds : nullptr)
-				: build_block_placement(key, cam_state.active_frame, scale, fb, &publication.committed_delta, found_stale ? &stale_bounds : nullptr);
-			if (!place.valid) {
-				if (closed_presentation) ++last_streaming_diagnostics.closed_placement_failures;
-				continue;
-			}
+				: build_block_placement(cand.key, cam_state.active_frame, scale, fb, &publication.committed_delta, found_stale ? &stale_bounds : nullptr);
+			if (!place.valid) continue;
 
-			godot::AABB global_aabb = godot::Transform3D(
-				place.block_to_active_frame, godot::Vector3(0, 0, 0)
-			).xform(place.local_aabb);
-			global_aabb.position += place.local_origin;
-			if (has_active_presentation_binding) {
-				global_aabb.position += active_view_world_position;
-			}
-			bool is_visible = frustum.intersects_aabb(global_aabb);
-			if (chp_view && chp_view->chp_effective && has_active_presentation_binding) {
-				// R1: Conservative debug culling under CHP - frustum culling bypassed
-				is_visible = true;
-			}
+			const Multinet::TerrainRequestClass base_req_class = cand.exact_visible
+				? Multinet::TerrainRequestClass::ImmediateVisible
+				: Multinet::TerrainRequestClass::Prefetch;
 
-			uint8_t edge_mask = 0;
-			if (du == r - 1) edge_mask |= 1;
-			if (du == -r)    edge_mask |= 2;
-			if (dv == r - 1) edge_mask |= 4;
-			if (dv == -r)    edge_mask |= 8;
+			if (source_mode == TerrainSourceMode::HybridAdditiveDelta) {
+				bool may_have_delta = true;
+				if (publication.committed_delta.field) {
+					double req_apron = profile.get_lod_spacing(lod);
+					may_have_delta = cand.sample_patch.is_valid() || (active_domain.is_valid()
+						? publication.committed_delta.field->block_may_have_nonzero_delta(cand.key, active_domain, profile, req_apron)
+						: publication.committed_delta.field->block_may_have_nonzero_delta(cand.key, scale, profile, req_apron));
+				} else {
+					may_have_delta = false;
+				}
 
-			GlobalCandInfo cand;
-			cand.key = key;
-			cand.presentation_key = presentation_key;
-			cand.sample_patch = sample_patch;
-			cand.block_to_active_frame = place.block_to_active_frame;
-			cand.local_origin = place.local_origin;
-			cand.local_aabb = place.local_aabb;
-			cand.is_visible = is_visible;
-			cand.dist_sq_m = static_cast<int64_t>(offsets[off_i].dist_sq * block_size * block_size);
-			cand.lod = lod;
-			cand.raw_edge_mask = edge_mask;
-
-			if (lod_candidate_counts[lod] < BlockClipmapProfile::MAX_CANDIDATES) {
-				lod_candidates[lod][lod_candidate_counts[lod]++] = cand;
-			} else {
-				last_streaming_diagnostics.wanted_set_overflow = true;
-			}
-
-			// Populate unified FrameDemandTable!
-			if (is_visible) {
-				if (source_mode == TerrainSourceMode::HybridAdditiveDelta) {
-					bool may_have_delta = true;
-					if (publication.committed_delta.field) {
-						double req_apron = profile.get_lod_spacing(lod);
-						may_have_delta = sample_patch.is_valid() || (active_domain.is_valid()
-							? publication.committed_delta.field->block_may_have_nonzero_delta(key, active_domain, profile, req_apron)
-							: publication.committed_delta.field->block_may_have_nonzero_delta(key, scale, profile, req_apron));
-					} else {
-						may_have_delta = false;
+				bool has_stale_gpu_slot = false;
+				for (uint32_t j = 1; j < 128; ++j) {
+					const auto& slot = levels[lod].slots[j];
+					if ((slot.state == TerrainGpuPageState::Resident || slot.state == TerrainGpuPageState::UploadPending) &&
+						slot.key == cand.key && slot.sample_patch == cand.sample_patch) {
+						has_stale_gpu_slot = true;
+						break;
 					}
+				}
 
-					bool has_stale_gpu_slot = false;
-					for (uint32_t j = 1; j < 128; ++j) {
-						const auto& slot = levels[lod].slots[j];
-						if ((slot.state == TerrainGpuPageState::Resident || slot.state == TerrainGpuPageState::UploadPending) &&
-							slot.key == key && slot.sample_patch == sample_patch) {
-							has_stale_gpu_slot = true;
-							break;
+				if (may_have_delta || has_stale_gpu_slot) {
+					demand_table.insert_or_update(cand.key, req_ctx, base_req_class, cand.dist_sq_m, place, cand.raw_edge_mask, cand.exact_visible);
+				}
+			} else if (source_mode == TerrainSourceMode::AbsoluteHeightPageDebug || analytic_debug_prewarm_pages) {
+				if (lod < profile.level_count - 1) {
+					// 1. ImmediateVisible or Prefetch
+					demand_table.insert_or_update(cand.key, req_ctx, base_req_class, cand.dist_sq_m, place, cand.raw_edge_mask, cand.exact_visible);
+
+					const uint8_t parent_lod = lod + 1 < profile.level_count ? lod + 1 : lod;
+					if (closed_presentation) {
+						int64_t parent_u = floor_div(cand.presentation_key.block_u, int64_t{ 2 });
+						int64_t parent_v = floor_div(cand.presentation_key.block_v, int64_t{ 2 });
+						for (int sibling_index = 0; sibling_index < 4; ++sibling_index) {
+							const int64_t sibling_u = parent_u * 2 + (sibling_index & 1);
+							const int64_t sibling_v = parent_v * 2 + ((sibling_index >> 1) & 1);
+							TerrainPresentationBlockKey sibling_presentation{};
+							TerrainRenderBlockKey sibling_owner{};
+							TerrainSamplePatchKey sibling_patch{};
+							uint32_t sibling_transitions = 0;
+							if (!make_closed_identity(sibling_u, sibling_v, lod, sibling_presentation,
+								sibling_owner, sibling_patch, sibling_transitions)) {
+								++last_streaming_diagnostics.closed_placement_failures;
+								continue;
+							}
+							const auto sibling_ctx = Multinet::make_page_request_context(
+								sibling_owner, sibling_patch, profile, publication, scale);
+							const BlockPlacement sibling_place = build_presentation_block_placement(
+								sibling_presentation, sibling_owner, active_cam_u, active_cam_v, fb,
+								&publication.committed_delta);
+							if (sibling_place.valid) {
+								demand_table.insert_or_update(sibling_owner, sibling_ctx,
+									Multinet::TerrainRequestClass::AtomicSibling, cand.dist_sq_m,
+									sibling_place, 0, false);
+							}
 						}
-					}
 
-					if (may_have_delta || has_stale_gpu_slot) {
-						demand_table.insert_or_update(key, req_ctx, Multinet::TerrainRequestClass::ImmediateVisible, cand.dist_sq_m, place, edge_mask, true);
-					}
-				} else if (source_mode == TerrainSourceMode::AbsoluteHeightPageDebug || analytic_debug_prewarm_pages) {
-					if (lod < profile.level_count - 1) {
-						// 1. ImmediateVisible
-						demand_table.insert_or_update(key, req_ctx, Multinet::TerrainRequestClass::ImmediateVisible, cand.dist_sq_m, place, edge_mask, true);
-
-						const uint8_t parent_lod = lod + 1 < profile.level_count ? lod + 1 : lod;
-						if (closed_presentation) {
-							// Coverage identities live in the same unfolding as the visible
-							// block. Canonical parent arithmetic loses that phase at seams.
-							int64_t parent_u = floor_div(bx, int64_t{ 2 });
-							int64_t parent_v = floor_div(bv_coord, int64_t{ 2 });
-							for (int sibling_index = 0; sibling_index < 4; ++sibling_index) {
-								const int64_t sibling_u = parent_u * 2 + (sibling_index & 1);
-								const int64_t sibling_v = parent_v * 2 + ((sibling_index >> 1) & 1);
-								TerrainPresentationBlockKey sibling_presentation{};
-								TerrainRenderBlockKey sibling_owner{};
-								TerrainSamplePatchKey sibling_patch{};
-								uint32_t sibling_transitions = 0;
-								if (!make_closed_identity(sibling_u, sibling_v, lod, sibling_presentation,
-									sibling_owner, sibling_patch, sibling_transitions)) {
-									++last_streaming_diagnostics.closed_placement_failures;
-									continue;
-								}
-								const auto sibling_ctx = Multinet::make_page_request_context(
-									sibling_owner, sibling_patch, profile, publication, scale);
-								const BlockPlacement sibling_place = build_presentation_block_placement(
-									sibling_presentation, sibling_owner, active_cam_u, active_cam_v, fb,
-									&publication.committed_delta);
-								if (sibling_place.valid) {
-									demand_table.insert_or_update(sibling_owner, sibling_ctx,
-										Multinet::TerrainRequestClass::AtomicSibling, cand.dist_sq_m,
-										sibling_place, 0, false);
-								}
+						for (uint8_t target_lod = parent_lod; target_lod < profile.level_count; ++target_lod) {
+							if (target_lod > parent_lod) {
+								parent_u = floor_div(parent_u, int64_t{ 2 });
+								parent_v = floor_div(parent_v, int64_t{ 2 });
 							}
-
-							for (uint8_t target_lod = parent_lod; target_lod < profile.level_count; ++target_lod) {
-								if (target_lod > parent_lod) {
-									parent_u = floor_div(parent_u, int64_t{ 2 });
-									parent_v = floor_div(parent_v, int64_t{ 2 });
-								}
-								TerrainPresentationBlockKey parent_presentation{};
-								TerrainRenderBlockKey parent_owner{};
-								TerrainSamplePatchKey parent_patch{};
-								uint32_t parent_transitions = 0;
-								if (!make_closed_identity(parent_u, parent_v, target_lod, parent_presentation,
-									parent_owner, parent_patch, parent_transitions)) {
-									++last_streaming_diagnostics.closed_placement_failures;
-									break;
-								}
-								const auto parent_ctx = Multinet::make_page_request_context(
-									parent_owner, parent_patch, profile, publication, scale);
-								const BlockPlacement parent_place = build_presentation_block_placement(
-									parent_presentation, parent_owner, active_cam_u, active_cam_v, fb,
-									&publication.committed_delta);
-								if (!parent_place.valid) continue;
-								const Multinet::TerrainRequestClass parent_class =
-									(target_lod == profile.level_count - 1)
-										? Multinet::TerrainRequestClass::TerminalBootstrap
-										: Multinet::TerrainRequestClass::CoarseCoverage;
-								demand_table.insert_or_update(parent_owner, parent_ctx, parent_class,
-									cand.dist_sq_m, parent_place, 0, false);
+							TerrainPresentationBlockKey parent_presentation{};
+							TerrainRenderBlockKey parent_owner{};
+							TerrainSamplePatchKey parent_patch{};
+							uint32_t parent_transitions = 0;
+							if (!make_closed_identity(parent_u, parent_v, target_lod, parent_presentation,
+								parent_owner, parent_patch, parent_transitions)) {
+								++last_streaming_diagnostics.closed_placement_failures;
+								break;
 							}
+							const auto parent_ctx = Multinet::make_page_request_context(
+								parent_owner, parent_patch, profile, publication, scale);
+							const BlockPlacement parent_place = build_presentation_block_placement(
+								parent_presentation, parent_owner, active_cam_u, active_cam_v, fb,
+								&publication.committed_delta);
+							if (!parent_place.valid) continue;
+							const Multinet::TerrainRequestClass parent_class =
+								(target_lod == profile.level_count - 1)
+									? Multinet::TerrainRequestClass::TerminalBootstrap
+									: Multinet::TerrainRequestClass::CoarseCoverage;
+							demand_table.insert_or_update(parent_owner, parent_ctx, parent_class,
+								cand.dist_sq_m, parent_place, 0, false);
+						}
+					} else {
+						// 2. AtomicSibling
+						TerrainRenderBlockKey parent_key;
+						if (active_domain.is_valid()) {
+							if (!derive_domain_parent_key(cand.key, parent_lod, active_domain, parent_key)) continue;
 						} else {
-							// 2. AtomicSibling
-							TerrainRenderBlockKey parent_key;
-							if (active_domain.is_valid()) {
-								if (!derive_domain_parent_key(key, parent_lod, active_domain, parent_key)) continue;
-							} else {
-								parent_key = derive_canonical_parent_key(key, parent_lod, scale);
-							}
-							std::array<TerrainRenderBlockKey, 4> sibs{};
-							const uint32_t sibling_count = active_domain.is_valid()
-								? enumerate_domain_child_keys(parent_key, active_domain, sibs)
-								: (enumerate_canonical_child_keys(parent_key, scale, sibs), 4u);
-							for (uint32_t sibling_index = 0; sibling_index < sibling_count; ++sibling_index) {
-								const auto& sib = sibs[sibling_index];
-								Multinet::TerrainPageRequestContext sib_ctx = Multinet::make_page_request_context(sib, profile, publication, scale);
-								BlockPlacement sib_place = build_block_placement(sib, cam_state.active_frame, scale, fb, &publication.committed_delta);
-								demand_table.insert_or_update(sib, sib_ctx, Multinet::TerrainRequestClass::AtomicSibling, cand.dist_sq_m, sib_place, 0, false);
-							}
-
-							// 3. CoarseCoverage & TerminalBootstrap recursively up to top level
-							TerrainRenderBlockKey p_k = parent_key;
-							for (uint8_t target_lod = lod + 1; target_lod < profile.level_count; ++target_lod) {
-								if (target_lod > lod + 1) {
-									if (active_domain.is_valid()) {
-										if (!derive_domain_parent_key(p_k, target_lod, active_domain, p_k)) break;
-									} else {
-										p_k = derive_canonical_parent_key(p_k, target_lod, scale);
-									}
-								}
-								Multinet::TerrainRequestClass p_class = (target_lod == profile.level_count - 1) ? Multinet::TerrainRequestClass::TerminalBootstrap : Multinet::TerrainRequestClass::CoarseCoverage;
-								Multinet::TerrainPageRequestContext p_ctx = Multinet::make_page_request_context(p_k, profile, publication, scale);
-								BlockPlacement p_place = build_block_placement(p_k, cam_state.active_frame, scale, fb, &publication.committed_delta);
-								demand_table.insert_or_update(p_k, p_ctx, p_class, cand.dist_sq_m, p_place, 0, false);
-							}
+							parent_key = derive_canonical_parent_key(cand.key, parent_lod, scale);
 						}
-					} else {
-						// Requirement 1: Visible top-level (terminal) candidates are classified directly as TerminalBootstrap!
-						// Do not create atomic siblings or recursive parents for top-level candidates.
-						demand_table.insert_or_update(key, req_ctx, Multinet::TerrainRequestClass::TerminalBootstrap, cand.dist_sq_m, place, edge_mask, true);
+						std::array<TerrainRenderBlockKey, 4> sibs{};
+						const uint32_t sibling_count = active_domain.is_valid()
+							? enumerate_domain_child_keys(parent_key, active_domain, sibs)
+							: (enumerate_canonical_child_keys(parent_key, scale, sibs), 4u);
+						for (uint32_t sibling_index = 0; sibling_index < sibling_count; ++sibling_index) {
+							const auto& sib = sibs[sibling_index];
+							Multinet::TerrainPageRequestContext sib_ctx = Multinet::make_page_request_context(sib, profile, publication, scale);
+							BlockPlacement sib_place = build_block_placement(sib, cam_state.active_frame, scale, fb, &publication.committed_delta);
+							demand_table.insert_or_update(sib, sib_ctx, Multinet::TerrainRequestClass::AtomicSibling, cand.dist_sq_m, sib_place, 0, false);
+						}
+
+						// 3. CoarseCoverage & TerminalBootstrap recursively up to top level
+						TerrainRenderBlockKey p_k = parent_key;
+						for (uint8_t target_lod = lod + 1; target_lod < profile.level_count; ++target_lod) {
+							if (target_lod > lod + 1) {
+								if (active_domain.is_valid()) {
+									if (!derive_domain_parent_key(p_k, target_lod, active_domain, p_k)) break;
+								} else {
+									p_k = derive_canonical_parent_key(p_k, target_lod, scale);
+								}
+							}
+							Multinet::TerrainRequestClass p_class = (target_lod == profile.level_count - 1) ? Multinet::TerrainRequestClass::TerminalBootstrap : Multinet::TerrainRequestClass::CoarseCoverage;
+							Multinet::TerrainPageRequestContext p_ctx = Multinet::make_page_request_context(p_k, profile, publication, scale);
+							BlockPlacement p_place = build_block_placement(p_k, cam_state.active_frame, scale, fb, &publication.committed_delta);
+							demand_table.insert_or_update(p_k, p_ctx, p_class, cand.dist_sq_m, p_place, 0, false);
+						}
 					}
+				} else {
+					// Visible top-level (terminal) candidates are classified directly as TerminalBootstrap!
+					demand_table.insert_or_update(cand.key, req_ctx, Multinet::TerrainRequestClass::TerminalBootstrap, cand.dist_sq_m, place, cand.raw_edge_mask, cand.exact_visible);
 				}
 			}
 		}
@@ -1763,17 +2090,16 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 			if (lod_cut_diag.turnover_fraction > frame_cut_diag.worst_candidate_turnover) {
 				frame_cut_diag.worst_candidate_turnover = lod_cut_diag.turnover_fraction;
 			}
-
-			levels[lod].last_candidate_count = lod_candidate_counts[lod];
-			for (size_t i = 0; i < lod_candidate_counts[lod]; ++i) {
-				levels[lod].diagnostic_candidate_keys[i] = lod_candidates[lod][i].key;
-			}
 		} else {
-			levels[lod].last_candidate_count = lod_candidate_counts[lod];
 			lod_cut_diag.candidates_retained = 0;
 			lod_cut_diag.candidates_added = 0;
 			lod_cut_diag.candidates_removed = 0;
 			lod_cut_diag.turnover_fraction = 0.0f;
+		}
+
+		levels[lod].last_candidate_count = lod_candidate_counts[lod];
+		for (size_t i = 0; i < lod_candidate_counts[lod]; ++i) {
+			levels[lod].diagnostic_candidate_keys[i] = lod_candidates[lod][i].key;
 		}
 	}
 	last_streaming_diagnostics.frame_demand_count = static_cast<uint32_t>(demand_table.count);

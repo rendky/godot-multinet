@@ -393,9 +393,23 @@ struct FrameTerrainSubmissionPlan {
 
 struct StreamingDiagnosticsSnapshot {
 	uint32_t enumerated_candidates{ 0 };
+	uint32_t exact_frustum_visible_candidates{ 0 };
+	uint32_t exact_frustum_culled_candidates{ 0 };
 	uint32_t frustum_visible_candidates{ 0 };
 	uint32_t frustum_culled_candidates{ 0 };
+	uint32_t chp_curved_bounds_candidates{ 0 };
+	uint32_t chp_curved_bounds_fallback_visible{ 0 };
+	uint32_t chp_out_of_certified_envelope_candidates{ 0 };
+	uint32_t chp_bounds_failure_candidates{ 0 };
+	uint32_t guard_visible_candidates{ 0 };
 	uint32_t resident_visible_candidates{ 0 };
+	uint32_t resident_guard_only_candidates{ 0 };
+	uint32_t resident_lease_only_candidates{ 0 };
+	uint32_t residency_entries_added{ 0 };
+	uint32_t residency_entries_evicted{ 0 };
+	uint32_t eviction_eligible_but_deferred{ 0 };
+	uint32_t multimesh_buffers_rewritten{ 0 };
+	size_t total_instance_bytes_uploaded{ 0 };
 	uint32_t parent_covered_visible_regions{ 0 };
 	uint32_t layer_zero_visible_instances{ 0 };
 	uint32_t lod_0_6_layer_zero_instances{ 0 };
@@ -551,6 +565,7 @@ private:
 	bool chp_debug_negative_height_exaggeration{ false };
 	int bccm_debug_visual_mode{ 0 };
 	int bccm_performance_probe_mode{ 0 };
+	bool chp_curved_frustum_culling_enabled_{ true };
 	bool is_visible_{ true };
 	Multinet::TerrainFallbackBounds fallback_bounds{};
 	Multinet::WorldDomainManifest active_domain{};
@@ -631,6 +646,16 @@ private:
 		int32_t last_hole_dz{ 0 };
 		bool has_last_hole{ false };
 
+		struct BlockVisibilityLease {
+			TerrainPresentationBlockKey presentation_key{};
+			TerrainRenderBlockKey render_key{};
+			TerrainSamplePatchKey sample_patch{};
+			double lease_remaining_seconds{ 0.0 };
+			bool has_lease{ false };
+		};
+		std::array<BlockVisibilityLease, BlockClipmapProfile::MAX_CANDIDATES> residency_leases{};
+		uint32_t residency_lease_count{ 0 };
+
 		std::array<TerrainRenderBlockKey, BlockClipmapProfile::MAX_CANDIDATES> diagnostic_candidate_keys{};
 		std::array<VisibleInstanceDiagnostic, BlockClipmapProfile::MAX_CANDIDATES> pending_visible_diagnostics{};
 		std::array<VisibleInstanceDiagnostic, BlockClipmapProfile::MAX_CANDIDATES> submitted_visible_diagnostics{};
@@ -641,6 +666,11 @@ private:
 	RenderID scenario_rid;
 	bool is_initialized{ false };
 	bool has_v5_chart_global_lease_{ false };
+	BCCMShaderData unshaded_shader_data{};
+	uint64_t last_unfolding_generation_{ 0 };
+	Multinet::SurfaceFace last_camera_face_{ static_cast<Multinet::SurfaceFace>(255) };
+
+	void clear_visibility_residency() noexcept;
 
 	// Retained for change-detection diagnostics only.
 	Multinet::TerrainRenderSourceSnapshot last_snapshot;
@@ -910,6 +940,14 @@ public:
 
 	int get_bccm_performance_probe_mode() const noexcept { return bccm_performance_probe_mode; }
 	void set_bccm_performance_probe_mode(int mode) noexcept;
+
+	bool get_chp_curved_frustum_culling_enabled() const noexcept { return chp_curved_frustum_culling_enabled_; }
+	void set_chp_curved_frustum_culling_enabled(bool enabled) noexcept {
+		if (chp_curved_frustum_culling_enabled_ != enabled) {
+			chp_curved_frustum_culling_enabled_ = enabled;
+			clear_visibility_residency();
+		}
+	}
 
 	bool is_visible() const noexcept { return is_visible_; }
 	void set_visible(bool visible) noexcept;

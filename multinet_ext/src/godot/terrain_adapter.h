@@ -282,6 +282,8 @@ public:
 	int get_bccm_debug_visual_mode() const;
 	void set_bccm_performance_probe_mode(int p_mode);
 	int get_bccm_performance_probe_mode() const;
+	void set_chp_curved_frustum_culling_enabled(bool p_enabled);
+	bool get_chp_curved_frustum_culling_enabled() const;
 
 	// Read-only derived world-domain diagnostics.
 	double get_canonical_area_km2() const;

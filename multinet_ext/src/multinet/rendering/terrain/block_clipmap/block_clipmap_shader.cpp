@@ -1283,4 +1283,39 @@ BCCMShaderData create_bccm_shader_material() {
 #endif
 }
 
+static const char* s_bccm_unshaded_shader_code = R"(shader_type spatial;
+render_mode unshaded, cull_back, depth_draw_opaque;
+
+void vertex() {
+	VERTEX = vec3(VERTEX.x, 0.0, VERTEX.z);
+	NORMAL = vec3(0.0, 1.0, 0.0);
+	uint r_bits = uint(round(INSTANCE_CUSTOM.r));
+	bool uses_camera_relative_render = (r_bits & (1u << 16u)) != 0u;
+	if (uses_camera_relative_render) {
+		MODELVIEW_MATRIX = mat4(mat3(VIEW_MATRIX)) * MODEL_MATRIX;
+		MODELVIEW_NORMAL_MATRIX = mat3(VIEW_MATRIX) * MODEL_NORMAL_MATRIX;
+	}
+}
+
+void fragment() {
+	ALBEDO = vec3(0.2, 0.6, 0.3);
+}
+)";
+
+BCCMShaderData create_bccm_unshaded_shader_material() {
+#ifndef MULTINET_TEST
+	godot::RenderingServer *rs = godot::RenderingServer::get_singleton();
+
+	godot::RID shader_rid = rs->shader_create();
+	rs->shader_set_code(shader_rid, godot::String(s_bccm_unshaded_shader_code));
+
+	godot::RID material_rid = rs->material_create();
+	rs->material_set_shader(material_rid, shader_rid);
+
+	return BCCMShaderData{ shader_rid, material_rid };
+#else
+	return BCCMShaderData{ 0, 0 };
+#endif
+}
+
 } // namespace multinet::rendering

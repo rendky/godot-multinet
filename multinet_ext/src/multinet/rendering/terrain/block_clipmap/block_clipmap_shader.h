@@ -41,6 +41,9 @@ std::string get_bccm_shader_code_string();
 // Create and return the RIDs of the BCCM base ShaderMaterial and Shader
 BCCMShaderData create_bccm_shader_material();
 
+// Create and return the RIDs of the BCCM unshaded diagnostic ShaderMaterial and Shader
+BCCMShaderData create_bccm_unshaded_shader_material();
+
 } // namespace multinet::rendering
 
 #endif // MULTINET_BLOCK_CLIPMAP_SHADER_H
