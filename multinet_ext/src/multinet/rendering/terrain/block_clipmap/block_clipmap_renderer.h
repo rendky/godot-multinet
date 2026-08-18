@@ -408,6 +408,8 @@ struct StreamingDiagnosticsSnapshot {
 	uint32_t residency_entries_added{ 0 };
 	uint32_t residency_entries_evicted{ 0 };
 	uint32_t eviction_eligible_but_deferred{ 0 };
+	uint32_t residency_stale_entries_purged{ 0 };
+	uint32_t residency_capacity_exhaustions{ 0 };
 	uint32_t multimesh_buffers_rewritten{ 0 };
 	size_t total_instance_bytes_uploaded{ 0 };
 	uint32_t parent_covered_visible_regions{ 0 };
@@ -948,6 +950,8 @@ public:
 			clear_visibility_residency();
 		}
 	}
+	bool get_r3_debug_curved_frustum_culling() const noexcept { return get_chp_curved_frustum_culling_enabled(); }
+	void set_r3_debug_curved_frustum_culling(bool enabled) noexcept { set_chp_curved_frustum_culling_enabled(enabled); }
 
 	bool is_visible() const noexcept { return is_visible_; }
 	void set_visible(bool visible) noexcept;

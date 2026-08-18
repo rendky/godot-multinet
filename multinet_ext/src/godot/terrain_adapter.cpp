@@ -288,9 +288,11 @@ void MultinetBCCMNode3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_bccm_performance_probe_mode"), &MultinetBCCMNode3D::get_bccm_performance_probe_mode);
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "bccm_performance_probe_mode", PROPERTY_HINT_ENUM, "Full,FullPosition_ConstantNormal,NoTerrain,MinimalVertex,MinimalVertex_Unshaded"), "set_bccm_performance_probe_mode", "get_bccm_performance_probe_mode");
 
+	ClassDB::bind_method(D_METHOD("set_r3_debug_curved_frustum_culling", "enabled"), &MultinetBCCMNode3D::set_r3_debug_curved_frustum_culling);
+	ClassDB::bind_method(D_METHOD("get_r3_debug_curved_frustum_culling"), &MultinetBCCMNode3D::get_r3_debug_curved_frustum_culling);
 	ClassDB::bind_method(D_METHOD("set_chp_curved_frustum_culling_enabled", "enabled"), &MultinetBCCMNode3D::set_chp_curved_frustum_culling_enabled);
 	ClassDB::bind_method(D_METHOD("get_chp_curved_frustum_culling_enabled"), &MultinetBCCMNode3D::get_chp_curved_frustum_culling_enabled);
-	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "chp_curved_frustum_culling_enabled"), "set_chp_curved_frustum_culling_enabled", "get_chp_curved_frustum_culling_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "r3_debug_curved_frustum_culling"), "set_r3_debug_curved_frustum_culling", "get_r3_debug_curved_frustum_culling");
 
 
 	ClassDB::bind_method(D_METHOD("set_freeze_update", "freeze"), &MultinetBCCMNode3D::set_freeze_update);
@@ -1882,12 +1884,15 @@ godot::Dictionary MultinetBCCMNode3D::get_debug_summary() const {
 	dict["residency_entries_added"] = streaming.residency_entries_added;
 	dict["residency_entries_evicted"] = streaming.residency_entries_evicted;
 	dict["eviction_eligible_but_deferred"] = streaming.eviction_eligible_but_deferred;
+	dict["residency_stale_entries_purged"] = streaming.residency_stale_entries_purged;
+	dict["residency_capacity_exhaustions"] = streaming.residency_capacity_exhaustions;
 	dict["multimesh_buffers_rewritten"] = streaming.multimesh_buffers_rewritten;
 	dict["total_instance_bytes_uploaded"] = static_cast<int64_t>(streaming.total_instance_bytes_uploaded);
 	dict["chp_curved_bounds_candidates"] = streaming.chp_curved_bounds_candidates;
 	dict["chp_curved_bounds_fallback_visible"] = streaming.chp_curved_bounds_fallback_visible;
 	dict["chp_out_of_certified_envelope_candidates"] = streaming.chp_out_of_certified_envelope_candidates;
 	dict["chp_bounds_failure_candidates"] = streaming.chp_bounds_failure_candidates;
+	dict["r3_debug_curved_frustum_culling"] = bccm_renderer.get_chp_curved_frustum_culling_enabled();
 	dict["chp_curved_frustum_culling_enabled"] = bccm_renderer.get_chp_curved_frustum_culling_enabled();
 #ifdef DEBUG_ENABLED
 	dict["editor_observer_valid"] = editor_observer_state.valid;

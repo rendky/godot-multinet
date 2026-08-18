@@ -1744,6 +1744,43 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 		} else {
 			// R3.1 Temporal Residency Logic
 			LODLevelData& level = levels[lod];
+
+			// Step 0: Immediate Stale Lease Purge
+			// An active lease may NOT outlive membership in the current BCCM candidate cut.
+			// Any lease whose physical block identity is not present in the current candidate set
+			// is purged immediately (not subject to 2-per-LOD eviction budget).
+			for (uint32_t l_idx = 0; l_idx < level.residency_lease_count; ++l_idx) {
+				auto& lease = level.residency_leases[l_idx];
+				if (!lease.has_lease) continue;
+				bool in_current_cut = false;
+				for (uint32_t c_idx = 0; c_idx < lod_cand_count; ++c_idx) {
+					const auto& cand = lod_candidates[lod][c_idx];
+					bool match = closed_presentation
+						? (cand.presentation_key == lease.presentation_key && cand.sample_patch == lease.sample_patch)
+						: (cand.key == lease.render_key);
+					if (match) {
+						in_current_cut = true;
+						break;
+					}
+				}
+				if (!in_current_cut) {
+					lease.has_lease = false;
+					++last_streaming_diagnostics.residency_stale_entries_purged;
+				}
+			}
+
+			// Compact table after stale purge so no holes prevent new lease admission
+			uint32_t post_purge_write_idx = 0;
+			for (uint32_t read_idx = 0; read_idx < level.residency_lease_count; ++read_idx) {
+				if (level.residency_leases[read_idx].has_lease) {
+					if (post_purge_write_idx != read_idx) {
+						level.residency_leases[post_purge_write_idx] = level.residency_leases[read_idx];
+					}
+					++post_purge_write_idx;
+				}
+			}
+			level.residency_lease_count = post_purge_write_idx;
+
 			std::array<int32_t, BlockClipmapProfile::MAX_CANDIDATES> cand_lease_indices;
 			cand_lease_indices.fill(-1);
 
@@ -1799,6 +1836,8 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 						new_lease.lease_remaining_seconds = 0.20;
 						new_lease.has_lease = true;
 						++last_streaming_diagnostics.residency_entries_added;
+					} else {
+						++last_streaming_diagnostics.residency_capacity_exhaustions;
 					}
 				} else {
 					// Guard not visible
@@ -2739,6 +2778,8 @@ TerrainUpdateResult BlockClipmapRenderer::compute_update(
 	frame_cut_diag.total_instances_submitted = total_instances;
 	frame_cut_diag.multimesh_buffers_rewritten = frame_buffers_rewritten;
 	frame_cut_diag.total_instance_bytes_uploaded = frame_bytes_uploaded;
+	last_streaming_diagnostics.multimesh_buffers_rewritten = frame_buffers_rewritten;
+	last_streaming_diagnostics.total_instance_bytes_uploaded = frame_bytes_uploaded;
 	last_cut_diagnostics_ = frame_cut_diag;
 
 	// Apply slot retirement for blocks whose submitted instance resolved to ExactResident or ExactReadyEmpty
